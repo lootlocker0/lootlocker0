@@ -18,6 +18,7 @@ const PRODUCT_FIELDS = {
   slug: true,
   name: true,
   description: true,
+  sizeProduct: true,
   priceCents: true,
   category: true,
   rarity: true,

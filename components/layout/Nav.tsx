@@ -35,9 +35,8 @@ export function Nav() {
           <img
             src="/logo.png"
             alt="LootLockers logo"
-            className="h-8 w-8 rounded-md object-cover"
+            className="h-12 w-36 rounded-md object-cover"
           />
-          <span className="hidden sm:inline">LootLockers</span>
         </Link>
 
         <ul className="flex items-center gap-6">

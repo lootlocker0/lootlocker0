@@ -131,6 +131,12 @@ docker exec -i lootlockers-postgres psql -U postgres -d lootlockers_dev < prisma
 npx prisma db seed
 ```
 
+To make it live in the database, rerun the seed in the project:
+
+```bash
+set -a && source .env.local && set +a && npx prisma db seed
+```
+
 ### Prisma says `DATABASE_URL` or `DIRECT_URL` is missing
 
 ```bash
