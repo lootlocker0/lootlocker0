@@ -237,7 +237,7 @@ const SLOT_TEMPLATE = [
   { label: "Pickup 1", startTime: "07:50", location: "Locker B449", capacity: 24 },
   { label: "Pickup 2", startTime: "10:50", location: "Hub", capacity: 24 },
   { label: "Pickup 3", startTime: "11:30", location: "Hub", capacity: 18 },
-  { label: "Pickup 4", startTime: "14:15", location: "Locker B449", capacity: 18 },
+  { label: "Pickup 4", startTime: "14:25", location: "Locker B449", capacity: 18 },
 ];
 
 /** Only seed the current day for the pickup picker. Repeating the same four

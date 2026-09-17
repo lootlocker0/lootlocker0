@@ -12,7 +12,7 @@ import { LockerMark } from "@/components/brand/LockerMark";
 export const metadata: Metadata = {
   title: "LootLockers | Order ahead, skip the line",
   description:
-    "School snack ordering with locker pickup. Browse The Locker, build your loadout, grab it between classes.",
+    "School snack ordering with loot pickup. Browse The Loot, build your loadout, grab it between classes.",
 };
 
 // Refresh the drop strip periodically; stock moves during a lunch service,
@@ -22,7 +22,7 @@ export const revalidate = 30;
 const STEPS = [
   {
     n: 1,
-    title: "Browse The Locker",
+    title: "Browse The Loot",
     body: "Filter by rarity or category and see live stock and allergens on every card.",
   },
   {
@@ -32,7 +32,7 @@ const STEPS = [
   },
   {
     n: 3,
-    title: "Grab it at the locker",
+    title: "Grab it at the loot",
     body: "Show your code at pickup and you're back to class before the bell.",
   },
 ] as const;
@@ -81,14 +81,14 @@ export default async function Home() {
             Snacks, <span className="text-gold">unlocked.</span>
           </h1>
           <p className="mx-auto mt-6 max-w-xl text-body-lg text-text-dim">
-            Order ahead from The Locker, build your loadout, and pick it up
+            Order ahead from The Loot, build your loadout, and pick it up
             between classes — no line, no cash fumbling, no missed lunch.
           </p>
           <Link
             href="/snacks"
             className="clip-shard mx-auto mt-8 inline-flex items-center justify-center bg-gold px-12 py-4 font-display text-lg uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
           >
-            Enter The Locker
+            Enter The Loot
           </Link>
         </section>
 
@@ -101,7 +101,7 @@ export default async function Home() {
               href="/snacks"
               className="font-mono text-sm uppercase text-brand hover:underline"
             >
-              See the full locker →
+              See the full loot →
             </Link>
           </div>
           <ProductGrid products={dropProducts} />

@@ -3326,3 +3326,24 @@ by trusting a suspicious "224 passed" summary that didn't match its own
 inline ✘ marks. That mismatch is worth remembering the next time a full
 suite's headline number and its own detail lines disagree: recount before
 trusting either.
+
+## P5 — backend (student account authentication) · 2026-09-16
+
+Added `User`, `AccountSession`, and `OAuthState` persistence plus the six
+`/api/account/*` endpoints documented in `docs/API-CONTRACT.md` §6c. Passwords
+use salted Node `scrypt`; account cookies contain random tokens whose hashes
+are stored server-side. Logout deletes the server row, so it revokes access
+even when a browser retains the old cookie.
+
+QA concurrency and replay targets:
+
+- Two simultaneous signups for the same username/email must produce one user;
+  unique constraints are the authority and the loser receives a 409.
+- Two simultaneous callbacks using one OAuth `state` must consume it once;
+  `deleteMany` on the expiring state is the claim, and the loser receives
+  `OAUTH_FAILED`.
+- A logout racing with `/api/account/me` may allow the already-started read to
+  finish, but every later request with that token must receive 401 because the
+  session row is gone.
+- Expired sessions and OAuth states are rejected by time checks. Cleanup of
+  old rows is optional maintenance and is not part of request authorization.

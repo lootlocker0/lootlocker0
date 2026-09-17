@@ -143,13 +143,13 @@ export function CheckoutForm() {
           Extraction Point
         </h1>
         <p className="mt-4 text-text-dim">
-          Your loadout is empty. Head to The Locker to build it first.
+          Your loadout is empty. Head to The Loot to build it first.
         </p>
         <Link
           href="/snacks"
           className="clip-shard mx-auto mt-8 inline-flex items-center justify-center bg-gold px-8 py-3 font-display uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
         >
-          Browse The Locker
+          Browse The Loot
         </Link>
       </div>
     );

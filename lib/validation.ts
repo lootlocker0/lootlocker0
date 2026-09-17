@@ -57,6 +57,17 @@ export const productQuerySchema = z.object({
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;
 
+export const accountSignupSchema = z.object({
+  username: z.string().trim().min(3).max(30).regex(/^[a-zA-Z0-9_]+$/),
+  email: z.string().trim().toLowerCase().pipe(z.email().max(160)),
+  password: z.string().min(8).max(200),
+});
+
+export const accountLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().pipe(z.email().max(160)),
+  password: z.string().min(1).max(200),
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/checkout
 // ─────────────────────────────────────────────────────────────────────────────

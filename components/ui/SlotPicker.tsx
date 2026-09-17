@@ -1,3 +1,5 @@
+import { formatSlotTime } from "@/lib/timezone";
+
 /**
  * Radio-group semantics so keyboard arrows move between slots. Full slots
  * render disabled with a reason, never hidden - a disappearing option reads
@@ -45,7 +47,7 @@ export function SlotPicker({
                 disabled={s.full}
                 onChange={() => onChange(s.id)}
               />
-              {s.startTime} · {s.label}
+              {formatSlotTime(s.startTime)} · {s.label}
               {s.full ? " — Full" : s.remaining <= 5 ? ` — ${s.remaining} left` : ""}
             </label>
           );

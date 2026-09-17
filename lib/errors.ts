@@ -18,6 +18,11 @@ export const ERROR_CODES = {
   PAYMENT_FAILED: { status: 402, message: "Payment was declined." },
   RATE_LIMITED: { status: 429, message: "Too many attempts. Wait a minute." },
   INTERNAL: { status: 500, message: "Something broke on our end." },
+  ACCOUNT_UNAUTHORIZED: { status: 401, message: "Email or password is incorrect." },
+  ACCOUNT_NOT_CONFIGURED: { status: 503, message: "Account sign-in is not configured on this server." },
+  OAUTH_FAILED: { status: 400, message: "Google sign-in could not be completed." },
+  USERNAME_TAKEN: { status: 409, message: "That username is already in use." },
+  EMAIL_TAKEN: { status: 409, message: "That email is already in use." },
 
   // ── P4, staff admin (app/api/admin/**) ────────────────────────────────────
   // Returned to an authenticated staff member, not to a student, so unlike
