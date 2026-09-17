@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useCart } from "@/stores/cart";
-import { LockerMark } from "@/components/brand/LockerMark";
 
 const LINKS = [
-  { href: "/snacks", label: "The Locker" },
+  { href: "/snacks", label: "The Loot" },
   { href: "/about", label: "Mission Briefing" },
+  { href: "/locker", label: "The Locker" },
 ];
 
 /**

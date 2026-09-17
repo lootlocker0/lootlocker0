@@ -25,13 +25,13 @@ export function CartView() {
       <div className="mx-auto max-w-6xl px-4 py-20 text-center sm:px-8">
         <h1 className="font-display text-headline-lg uppercase text-text">Loadout</h1>
         <p className="mt-4 text-text-dim">
-          Your locker is empty. Head to The Locker to build your loadout.
+          Your locker is empty. Head to The Loot to build your loadout.
         </p>
         <Link
           href="/snacks"
           className="clip-shard mx-auto mt-8 inline-flex items-center justify-center bg-gold px-8 py-3 font-display uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
         >
-          Browse The Locker
+          Browse The Loot
         </Link>
       </div>
     );

@@ -98,6 +98,65 @@ Source of truth: `lib/errors.ts`. Codes are added there first.
 `SLOT_FULL` and `OUT_OF_STOCK` are recoverable: refetch slots and the catalog
 and let the student retry. The rest are terminal for that attempt.
 
+## 6c. The Locker account
+
+Student accounts use the `ll_account` httpOnly, `SameSite=Lax` cookie. The
+cookie contains an opaque random token; only its SHA-256 hash is stored in
+`account_sessions`, and the server checks that row and its expiry on every
+request. Sessions last 30 days. Logout deletes the matching server row and
+expires the cookie, so a copied or previously issued cookie stops working.
+
+### `POST /api/account/signup`
+
+Body:
+
+```json
+{ "username": "locker_kid", "email": "student@example.com", "password": "at-least-8-chars" }
+```
+
+Creates a password account, starts a session, and returns:
+
+```json
+{ "user": { "id": "cuid", "username": "locker_kid", "email": "student@example.com", "rewardPoints": 0 } }
+```
+
+`USERNAME_TAKEN` (409) and `EMAIL_TAKEN` (409) identify uniqueness conflicts.
+Passwords are stored as salted Node `scrypt` hashes.
+
+### `POST /api/account/login`
+
+Body: `{ "email": "student@example.com", "password": "..." }`.
+On success, starts a session and returns the same `{ user }` shape as signup.
+Wrong credentials return `ACCOUNT_UNAUTHORIZED` (401) without revealing
+whether the email exists. Login and signup are rate limited before credential
+processing.
+
+### `GET /api/account/me`
+
+Returns the current session's `{ user }` shape. Missing, expired, or revoked
+sessions return `ACCOUNT_UNAUTHORIZED` (401).
+
+### `POST /api/account/logout`
+
+Revokes the current server session when present, expires `ll_account`, and
+returns `{ "ok": true }`. It is idempotent for a missing or already-revoked
+cookie.
+
+### `GET /api/account/google/start`
+
+When all `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+`GOOGLE_REDIRECT_URI` variables are configured, creates a ten-minute,
+single-use server-side OAuth state and redirects to Google. Missing
+configuration returns `ACCOUNT_NOT_CONFIGURED` (503).
+
+### `GET /api/account/google/callback`
+
+Validates and consumes the one-time state, exchanges the authorization code,
+requires a verified Google email, then links or creates the account and sets
+`ll_account`. Success redirects to `NEXT_PUBLIC_SITE_URL` (or the callback
+origin) at `/`. Invalid, expired, replayed, or failed callbacks return
+`OAUTH_FAILED` (400). No OAuth token or account PII is logged.
+
 `ORDER_NOT_FOUND` is deliberately ambiguous. It means "no order you are allowed
 to read" — an unknown order number, a missing or expired confirmation cookie, and
 a cookie belonging to a different order all produce the identical body. Do not

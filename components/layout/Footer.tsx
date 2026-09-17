@@ -22,7 +22,7 @@ export function Footer() {
           <ul className="flex flex-col gap-2 font-mono text-sm uppercase text-text-dim">
             <li>
               <Link href="/snacks" className="transition-colors hover:text-brand">
-                The Locker
+                The Loot
               </Link>
             </li>
             <li>

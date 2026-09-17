@@ -5,6 +5,7 @@ import Link from "next/link";
 import type { Allergen, OrderStatus, PaymentMethod, Rarity } from "@prisma/client";
 import { formatCents } from "@/lib/money";
 import { rarityMeta } from "@/lib/rarity";
+import { formatSlotTime } from "@/lib/timezone";
 import { AngledPanel } from "@/components/ui/AngledPanel";
 import { ShardButton } from "@/components/ui/ShardButton";
 import { ProgressTracker } from "@/components/ui/ProgressTracker";
@@ -185,7 +186,7 @@ export function OrderConfirmation({ orderNumber }: { orderNumber: string }) {
           href="/snacks"
           className="clip-shard mx-auto mt-8 inline-flex items-center justify-center bg-gold px-8 py-3 font-display uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
         >
-          Browse The Locker
+          Browse The Loot
         </Link>
       </Shell>
     );
@@ -260,7 +261,7 @@ export function OrderConfirmation({ orderNumber }: { orderNumber: string }) {
             <div>
               <dt className="text-text-faint">Pickup window</dt>
               <dd className="mt-1 text-text">
-                {order.slot.startTime} · {order.slot.label}
+                {formatSlotTime(order.slot.startTime)} · {order.slot.label}
               </dd>
             </div>
             <div>
@@ -347,7 +348,7 @@ export function OrderConfirmation({ orderNumber }: { orderNumber: string }) {
           href="/snacks"
           className="clip-shard inline-flex items-center justify-center bg-gold px-8 py-3 font-display uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
         >
-          Back to The Locker
+          Back to The Loot
         </Link>
       </div>
     </div>
@@ -436,7 +437,7 @@ function StatusBanner({
     order.status === "PICKED_UP"
       ? "This order has already been handed over."
       : order.status === "PACKED"
-        ? "Packed and waiting for you at the locker."
+        ? "Packed and waiting for you at the loot."
         : order.paymentMethod === "CASH_AT_PICKUP"
           ? "Bring cash to pay when you collect your order."
           : "Payment confirmed.";

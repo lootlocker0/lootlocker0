@@ -3468,3 +3468,23 @@ With that fixed, the Apple Pay button was confirmed rendering and functional in 
 **Still open, added to `BUILDPLAN.md`'s P5 Stripe checklist:** the `lootlockers.ca` domain registration above is test-mode only (it was created using the `sk_test_...` key). Stripe requires the identical registration to be repeated with live keys before going live — it does not carry over from test mode automatically.
 
 **Also worth noting for whoever deploys next:** while investigating, confirmed the account behind the project's `sk_test_...`/`pk_test_...` key pair (`acct_1UG5S82RQPidmIXn`) is a **different Stripe account** from the one connected to this session's Stripe Claude Code plugin (`acct_1UG5RzCntKQclbON`, "Loot Locker"). All Stripe API calls in this session and #85 used the project's own key directly over HTTP, never the plugin's tools, specifically to avoid writing to the wrong account. Anyone using the Stripe plugin/MCP tools on this project going forward should switch its connected account first, or keep using direct API calls with the project's own key.
+## P5 — backend (student account authentication) · 2026-09-16
+
+Added `User`, `AccountSession`, and `OAuthState` persistence plus the six
+`/api/account/*` endpoints documented in `docs/API-CONTRACT.md` §6c. Passwords
+use salted Node `scrypt`; account cookies contain random tokens whose hashes
+are stored server-side. Logout deletes the server row, so it revokes access
+even when a browser retains the old cookie.
+
+QA concurrency and replay targets:
+
+- Two simultaneous signups for the same username/email must produce one user;
+  unique constraints are the authority and the loser receives a 409.
+- Two simultaneous callbacks using one OAuth `state` must consume it once;
+  `deleteMany` on the expiring state is the claim, and the loser receives
+  `OAUTH_FAILED`.
+- A logout racing with `/api/account/me` may allow the already-started read to
+  finish, but every later request with that token must receive 401 because the
+  session row is gone.
+- Expired sessions and OAuth states are rejected by time checks. Cleanup of
+  old rows is optional maintenance and is not part of request authorization.
