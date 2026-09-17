@@ -102,6 +102,9 @@ model Product {
   name        String
   description String
 
+  /// Costco pack / unit size, e.g. "591 mL" or "25 g".
+  sizeProduct String? @map("size_product")
+
   /// Integer cents. Never a float, never a string.
   priceCents Int @map("price_cents")
 

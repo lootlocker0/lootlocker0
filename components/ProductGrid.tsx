@@ -15,6 +15,7 @@ export type CatalogProduct = {
   id: string;
   name: string;
   description: string;
+  sizeProduct?: string | null;
   priceCents: number;
   category: string;
   rarity: Rarity;
