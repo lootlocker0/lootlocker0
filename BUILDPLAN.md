@@ -238,11 +238,23 @@ Then the manual list. These are yours, not an agent's.
 - [ ] Upstash Redis provisioned; rate limiting confirmed live
 
 **Stripe**
-- [ ] Live keys swapped in
-- [ ] Live webhook endpoint registered, signing secret in env
-- [ ] Statement descriptor reads as something a parent recognizes
+- [ ] Live keys swapped in — *test-mode keys are live locally; `sk_live_`/
+  `pk_live_` still not provided, see `docs/HANDOFF.md` #85*
+- [x] Webhook endpoint registered, signing secret in env (test mode, local via
+  `stripe listen`; a deployed endpoint is still open — see `docs/HANDOFF.md` #85)
+- [x] Statement descriptor reads as something a parent recognizes
+  (`"LOOTLOCKERS"`, `lib/stripe/payments.ts:86`, confirmed against a real
+  test-mode PaymentIntent)
 - [ ] Radar rules reviewed for card-testing volume
-- [ ] One real transaction placed and refunded end to end
+- [x] One real transaction placed and refunded end to end (test mode —
+  `docs/HANDOFF.md` #85)
+- [x] Apple Pay works (no code change needed — `PaymentElement` +
+  `automatic_payment_methods` already covers it). Domain registered and
+  confirmed working in Safari on macOS and iOS — test mode only,
+  `docs/HANDOFF.md` #86
+- [ ] Apple Pay domain registration repeated in **live mode** — test-mode
+  registration does not carry over; needs `sk_live_` and is blocked on the
+  same "Live keys swapped in" line above
 
 **School sign-off** — blocking, and none of it is a code change
 - [ ] `tax_rate_bps` confirmed with the school's finance contact

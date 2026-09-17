@@ -1875,7 +1875,57 @@ Planned, in build order (shipped rows marked):
 | P4b | `POST /api/inventory/products` | Create a product. Allergens mandatory and affirmed | **Shipped** — §6b |
 | P4b | `GET` · `PATCH /api/inventory/products/[productId]` | Read and edit name, description, price, category, rarity, allergens, photo URL, active, sort order | **Shipped** — §6b |
 | P4b | `POST /api/inventory/products/[productId]/stock` | Atomic relative stock adjustment | **Shipped** — §6b |
-| P4b | photo upload | Real object storage | **Not built, deliberately** — needs a storage credential (`HANDOFF.md` §64). `imageUrl` takes a URL today. No stub exists |
+| P4b | `POST /api/inventory/images` | Photo upload, multipart, writes to local disk | **Shipped** — §6b, but not durable storage: `public/ProductImages/` does not survive a redeploy on an ephemeral filesystem host. Real object storage still not built, deliberately — needs a credential nobody has issued (`HANDOFF.md` §64) |
+
+---
+
+### Adding a product: the three supported ways
+
+No Stripe Product/Price catalog exists or is planned — `Product` has no
+`stripeProductId`/`stripePriceId` field, and never will unless that decision
+is revisited. Stripe is used only to move money at checkout, against a
+dynamically computed `amount`; the database is the only source of truth for
+name, price, rarity and allergens. All three ways below write to the same
+`Product` table through the same validated path — none of them is a
+shortcut around allergen review, slug uniqueness, or integer-cent pricing.
+
+1. **By hand, day to day** — sign in at `/inventory` with
+   `INVENTORY_PASSCODE` (§6b above). Create or edit with the product form,
+   adjust stock with a relative delta, upload a photo. Publishing (`active:
+   true`) is blocked until allergens are affirmed reviewed. This is the
+   normal path for a family member doing catalog upkeep.
+
+2. **Bulk or dev refresh** — edit the `SeedProduct[]` array in
+   `prisma/seed.ts` and rerun `npm run db:setup` (or `tsx prisma/seed.ts`
+   directly). Idempotent: upserts on `slug`, and deliberately never
+   overwrites `stockQty`, `PickupSlot.capacity` or `Setting.value` on a
+   re-run unless `SEED_RESET_STOCK=1` is set — a re-seed can refresh the
+   whole menu for a new term without touching live inventory counts.
+
+3. **Scripted / agent-driven** — `scripts/add-product.mjs` (added
+   alongside this entry) calls the same `/api/inventory/*` endpoints a human
+   editor's browser calls: it logs in with `INVENTORY_PASSCODE`, optionally
+   uploads a photo, then `POST`s to `/api/inventory/products` against the
+   exact `inventoryProductCreateSchema` shape documented in §6b. It is an
+   HTTP client of that contract, never a direct database writer, so nothing
+   it does can bypass the allergen gate, the slug-uniqueness check, or any
+   other invariant the human path already enforces. Use this when adding
+   products from a script or an agent session rather than a browser.
+
+**Known limitation, all three paths:** photo uploads (`POST
+/api/inventory/images`) write to local disk (`public/ProductImages/`), not
+durable object storage. On a host with an ephemeral filesystem (e.g.
+Vercel), an uploaded photo does not survive the next deploy. This is a
+pre-existing, already-flagged gap (`docs/HANDOFF.md` §64) — fixing it means
+choosing and wiring a real storage provider, which is not part of adding a
+product and is not done here.
+
+**`sizeProduct` only exists in path 2.** `inventoryProductCreateSchema` and
+`inventoryProductUpdateSchema` are both `.strict()` and neither lists
+`sizeProduct` (`docs/HANDOFF.md` §84) — the field can only be set today by
+editing `prisma/seed.ts`. A product created through `/inventory` or
+`scripts/add-product.mjs` gets no pack/unit-size string until this gap is
+closed by adding the field to both schemas and their routes.
 
 ---
 
