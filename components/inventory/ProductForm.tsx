@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { Allergen, Rarity } from "@prisma/client";
 import { PRODUCT_CATEGORIES } from "@/lib/validation";
 import { rarityMeta } from "@/lib/rarity";
@@ -77,6 +78,7 @@ export function ProductForm(props: Props) {
   const [category, setCategory] = useState(initial?.category ?? "");
   const [rarity, setRarity] = useState<Rarity | "">(initial?.rarity ?? "");
   const [imageUrl, setImageUrl] = useState(initial?.imageUrl ?? "");
+  const [uploadingImage, setUploadingImage] = useState(false);
   const [sortOrderInput, setSortOrderInput] = useState(
     initial && initial.sortOrder !== 0 ? String(initial.sortOrder) : "",
   );
@@ -112,6 +114,33 @@ export function ProductForm(props: Props) {
       // set active: true requires allergensReviewed: true").
       setAllergensReviewed(false);
     }
+  }
+
+  async function handleImageUpload(file: File | undefined) {
+    if (!file) return;
+    setError(null);
+    setBlockMessage(null);
+    setUploadingImage(true);
+
+    const body = new FormData();
+    body.append("file", file);
+    const res = await inventoryFetch<{ imageUrl: string }>("/api/inventory/images", {
+      method: "POST",
+      body,
+      headers: {},
+    });
+
+    setUploadingImage(false);
+    if (!res.ok) {
+      if (res.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      setError(res.error);
+      return;
+    }
+
+    setImageUrl(res.data.imageUrl);
   }
 
   async function submit(e: React.FormEvent<HTMLFormElement>) {
@@ -351,10 +380,18 @@ export function ProductForm(props: Props) {
 
       <div className="grid gap-4 sm:grid-cols-2">
         <Field
-          label="Photo URL"
+          label="Product photo"
           htmlFor="pf-image"
-          hint='Site-relative path (e.g. "/products/foo.svg") or a full "https://" URL. No file upload yet — see docs/HANDOFF.md.'
+          hint="Choose a JPG, PNG, WEBP, or GIF up to 5 MB, or enter an https:// URL."
         >
+          <input
+            id="pf-image-upload"
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            onChange={(e) => void handleImageUpload(e.target.files?.[0])}
+            disabled={uploadingImage || submitting}
+            className="mb-2 block w-full text-sm text-text-dim file:mr-3 file:border-2 file:border-brand file:bg-brand/10 file:px-3 file:py-2 file:font-mono file:text-xs file:uppercase file:text-brand"
+          />
           <input
             id="pf-image"
             value={imageUrl}
@@ -363,6 +400,16 @@ export function ProductForm(props: Props) {
             required
             className={inputClass}
           />
+          {uploadingImage && <p className="mt-1 text-xs text-text-dim">Uploading image…</p>}
+          {imageUrl && (
+            <Image
+              src={imageUrl}
+              alt=""
+              width={96}
+              height={96}
+              className="mt-3 h-24 w-24 border-2 border-white/10 object-cover"
+            />
+          )}
         </Field>
 
         <Field label="Sort order (optional)" htmlFor="pf-sort" hint="0–9999. Leave blank for default.">

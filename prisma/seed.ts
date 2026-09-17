@@ -42,6 +42,7 @@ import "dotenv/config";
 import type { Allergen, Rarity } from "@prisma/client";
 
 import { db } from "../lib/db";
+import { schoolParts } from "../lib/timezone";
 
 const RESET_STOCK = process.env.SEED_RESET_STOCK === "1";
 
@@ -245,15 +246,11 @@ const SLOT_TEMPLATE = [
 const SLOT_DAYS = 1;
 
 /**
- * Local midnight of today + offset. Local, not UTC: the cutoff check builds the
- * slot's real instant with `new Date(serviceDate).setHours(h, m)`, which is
- * local-time arithmetic. See docs/HANDOFF.md — timezone handling is open.
+ * UTC-midnight date key for the school's calendar day plus offset.
  */
 function serviceDay(offset: number): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + offset);
-  return d;
+  const p = schoolParts();
+  return new Date(Date.UTC(p.year, p.month - 1, p.day + offset));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -284,7 +281,10 @@ async function main() {
   // Remove stale future pickup slots so a reseed does not keep showing the old
   // multi-day list alongside the new single-day schedule.
   await db.pickupSlot.deleteMany({
-    where: { serviceDate: { gte: serviceDay(0) } },
+      where: {
+        serviceDate: { gte: serviceDay(0) },
+        orders: { none: {} },
+      },
   });
 
   // ── Products ──────────────────────────────────────────────────────────────
