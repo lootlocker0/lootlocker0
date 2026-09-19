@@ -20,7 +20,7 @@ export function ProductImage({
   height,
   className,
 }: {
-  src: string;
+  src: unknown;
   alt: string;
   rarity: Rarity;
   width: number;
@@ -29,8 +29,9 @@ export function ProductImage({
 }) {
   const [failed, setFailed] = useState(false);
   const meta = rarityMeta(rarity);
+  const imageSrc = typeof src === "string" ? src.trim() : "";
 
-  if (failed) {
+  if (failed || !imageSrc) {
     return (
       <div
         role="img"
@@ -68,7 +69,7 @@ export function ProductImage({
 
   return (
     <Image
-      src={src}
+      src={imageSrc}
       alt={alt}
       width={width}
       height={height}

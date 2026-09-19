@@ -240,10 +240,11 @@ const SLOT_TEMPLATE = [
   { label: "Pickup 4", startTime: "14:25", location: "Locker B449", capacity: 18 },
 ];
 
-/** Only seed the current day for the pickup picker. Repeating the same four
- * windows across every future date makes the UI feel duplicated and noisy.
+/** Seed the current day plus a few upcoming service days so the pickup picker
+ * shows the next available windows instead of a blank list during an empty slot
+ * rollout or a short early-morning gap.
  */
-const SLOT_DAYS = 1;
+const SLOT_DAYS = 3;
 
 /**
  * UTC-midnight date key for the school's calendar day plus offset.
