@@ -236,15 +236,15 @@ const PRODUCTS: SeedProduct[] = [
 const SLOT_TEMPLATE = [
   { label: "Pickup 1", startTime: "07:50", location: "Locker B449", capacity: 24 },
   { label: "Pickup 2", startTime: "10:50", location: "Hub", capacity: 24 },
-  { label: "Pickup 3", startTime: "11:30", location: "Hub", capacity: 18 },
-  { label: "Pickup 4", startTime: "14:25", location: "Locker B449", capacity: 18 },
+  { label: "Pickup 3", startTime: "11:20", location: "Hub", capacity: 18 },
+  { label: "Pickup 4", startTime: "14:30", location: "Locker B449", capacity: 18 },
 ];
 
 /** Seed the current day plus a few upcoming service days so the pickup picker
  * shows the next available windows instead of a blank list during an empty slot
  * rollout or a short early-morning gap.
  */
-const SLOT_DAYS = 3;
+const SLOT_DAYS = 7;
 
 /**
  * UTC-midnight date key for the school's calendar day plus offset.

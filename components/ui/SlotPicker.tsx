@@ -17,8 +17,16 @@ export function SlotPicker({
   value: string | null;
   onChange: (id: string) => void;
 }) {
-  const groups = useMemo(() => groupSlotsByDate(slots), [slots]);
+  const groups = useMemo(
+    () =>
+      groupSlotsByDate(slots).filter((group) => {
+        const day = new Date(group.dateKey).getUTCDay();
+        return day !== 0 && day !== 6;
+      }),
+    [slots],
+  );
   const [selectedDate, setSelectedDate] = useState<string | null>(groups[0]?.dateKey ?? null);
+  const [selectedManualTime, setSelectedManualTime] = useState<string | null>(null);
 
   const effectiveSelectedDate =
     selectedDate && groups.some((group) => group.dateKey === selectedDate)
@@ -29,6 +37,23 @@ export function SlotPicker({
     ? groups.find((group) => group.dateKey === effectiveSelectedDate)?.slots ?? []
     : [];
 
+  const upcomingDates = useMemo(() => {
+    const today = new Date();
+    return Array.from({ length: 7 }, (_, index) => {
+      const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + index));
+      return {
+        key: date.toISOString().slice(0, 10),
+        day: date.getUTCDay(),
+        label: new Intl.DateTimeFormat("en-CA", {
+          timeZone: "UTC",
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+        }).format(date),
+      };
+    }).filter((date) => date.day !== 0 && date.day !== 6);
+  }, []);
+
   return (
     <fieldset>
       <legend className="font-display text-headline-md uppercase text-text">
@@ -36,27 +61,69 @@ export function SlotPicker({
       </legend>
 
       {groups.length === 0 ? (
-        <p className="mt-3 border-2 border-warning/60 bg-surface-2 p-3 text-sm text-text-dim">
-          No pickup windows are available yet. Choose a future service date when the next slot opens.
-        </p>
+        <div className="mt-3 border-2 border-warning/60 bg-surface-2 p-4">
+          <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-gold">
+            Select your extraction date and time
+          </p>
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              {upcomingDates.map((date) => (
+              <button
+                key={date.key}
+                type="button"
+                onClick={() => setSelectedDate(date.key)}
+                  aria-pressed={selectedDate === date.key}
+                  className={`border-2 px-3 py-2 text-left font-mono text-xs transition-colors ${
+                    selectedDate === date.key
+                      ? "border-gold bg-gold text-void"
+                      : "border-white/10 text-text-faint hover:border-brand hover:text-text"
+                  }`}
+              >
+                {date.label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-4">
+            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">Time chart</span>
+            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" role="list" aria-label="Pickup times">
+              {["7:50 AM", "10:50 AM", "11:20 AM", "2:30 PM"].map((time) => (
+                <button
+                  key={time}
+                  type="button"
+                  onClick={() => setSelectedManualTime(time)}
+                  aria-pressed={selectedManualTime === time}
+                  className={`border px-3 py-2 text-center font-mono text-xs transition-colors ${
+                    selectedManualTime === time
+                      ? "border-gold bg-gold text-void"
+                      : "border-white/10 text-text-faint hover:border-brand hover:text-text"
+                  }`}
+                >
+                  {time}
+                </button>
+              ))}
+            </div>
+          </div>
+          <p className="mt-4 text-sm text-text-dim">
+            Choose a date and time above. Pickup windows become selectable here as soon as the service schedule is published.
+          </p>
+        </div>
       ) : (
         <div className="mt-3 flex flex-col gap-4">
-          <label className="flex flex-col gap-2">
-            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">
-              Pickup date
-            </span>
-            <select
-              value={effectiveSelectedDate ?? ""}
-              onChange={(e) => setSelectedDate(e.target.value || null)}
-              className="border-2 border-white/10 bg-surface-2 px-3 py-2 font-mono text-sm text-text focus:border-brand"
-            >
-              {groups.map((group) => (
-                <option key={group.dateKey} value={group.dateKey}>
-                  {group.heading}
-                </option>
-              ))}
-            </select>
-          </label>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {groups.map((group) => (
+              <button
+                key={group.dateKey}
+                type="button"
+                onClick={() => setSelectedDate(group.dateKey)}
+                className={`border-2 px-3 py-2 text-left font-mono text-xs transition-colors ${
+                  effectiveSelectedDate === group.dateKey
+                    ? "border-gold bg-gold text-void"
+                    : "border-white/10 text-text-faint hover:border-brand hover:text-text"
+                }`}
+              >
+                {group.heading}
+              </button>
+            ))}
+          </div>
 
           <div role="radiogroup" className="flex flex-wrap gap-2">
             {visibleSlots.map((s) => {

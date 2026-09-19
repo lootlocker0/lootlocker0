@@ -39,7 +39,21 @@ export async function POST(req: NextRequest) {
       },
       select: accountUserSelect,
     }).catch((error: unknown) => {
-      if ((error as { code?: string })?.code === "P2002") {
+      const prismaError = error as {
+        code?: string;
+        meta?: {
+          target?: unknown;
+          driverAdapterError?: {
+            cause?: {
+              code?: unknown;
+              constraint?: { index?: unknown };
+              originalMessage?: unknown;
+            };
+          };
+        };
+      };
+      const driverCause = prismaError.meta?.driverAdapterError?.cause;
+      if (prismaError.code === "P2002" || driverCause?.code === "23505") {
         // Prisma 7 + the pg driver adapter nests the real constraint name
         // under `meta.driverAdapterError.cause`, not the flat `meta.target`
         // string/array Prisma's built-in query engine used to report — see
@@ -50,13 +64,10 @@ export async function POST(req: NextRequest) {
         // ("users_username_key") and the raw Postgres error message contain
         // the column name; checking both is belt-and-suspenders against
         // either shape changing again.
-        const meta = (error as { meta?: Record<string, unknown> }).meta ?? {};
-        const driverCause = (
-          meta.driverAdapterError as { cause?: Record<string, unknown> } | undefined
-        )?.cause;
+        const meta = prismaError.meta ?? {};
         const haystack = [
           meta.target,
-          (driverCause?.constraint as { index?: unknown } | undefined)?.index,
+          driverCause?.constraint?.index,
           driverCause?.originalMessage,
         ]
           .map((v) => String(v ?? ""))

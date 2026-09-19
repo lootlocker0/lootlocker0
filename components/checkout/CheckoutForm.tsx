@@ -135,11 +135,11 @@ export function CheckoutForm() {
       .then(async (res) => {
         if (!res.ok) return;
         const payload = (await res.json()) as {
-          user?: { name: string | null; email: string };
+          user?: { name: string | null; username: string; email: string };
         };
         const account = payload.user;
         if (!account) return;
-        if (account.name) setStudentName((cur) => cur || account.name!);
+        setStudentName((cur) => cur || account.name || account.username);
         setEmail((cur) => cur || account.email);
       })
       .catch(() => {
