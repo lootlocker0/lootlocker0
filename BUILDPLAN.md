@@ -238,11 +238,23 @@ Then the manual list. These are yours, not an agent's.
 - [ ] Upstash Redis provisioned; rate limiting confirmed live
 
 **Stripe**
-- [ ] Live keys swapped in
-- [ ] Live webhook endpoint registered, signing secret in env
-- [ ] Statement descriptor reads as something a parent recognizes
+- [ ] Live keys swapped in — *test-mode keys are live locally; `sk_live_`/
+  `pk_live_` still not provided, see `docs/HANDOFF.md` #85*
+- [x] Webhook endpoint registered, signing secret in env (test mode, local via
+  `stripe listen`; a deployed endpoint is still open — see `docs/HANDOFF.md` #85)
+- [x] Statement descriptor reads as something a parent recognizes
+  (`"LOOTLOCKERS"`, `lib/stripe/payments.ts:86`, confirmed against a real
+  test-mode PaymentIntent)
 - [ ] Radar rules reviewed for card-testing volume
-- [ ] One real transaction placed and refunded end to end
+- [x] One real transaction placed and refunded end to end (test mode —
+  `docs/HANDOFF.md` #85)
+- [x] Apple Pay works (no code change needed — `PaymentElement` +
+  `automatic_payment_methods` already covers it). Domain registered and
+  confirmed working in Safari on macOS and iOS — test mode only,
+  `docs/HANDOFF.md` #86
+- [ ] Apple Pay domain registration repeated in **live mode** — test-mode
+  registration does not carry over; needs `sk_live_` and is blocked on the
+  same "Live keys swapped in" line above
 
 **School sign-off** — blocking, and none of it is a code change
 - [ ] `tax_rate_bps` confirmed with the school's finance contact
@@ -255,6 +267,49 @@ Then the manual list. These are yours, not an agent's.
 
 **Rollback**
 - [ ] Written answer to: how do you take orders if the site is down at 12:00?
+
+---
+
+## P6 · Accounts and reward points — new requirement, undocumented until now
+
+Not in the original phase plan. A student/customer account system (email
+password signup+login, Google OAuth) landed via a direct commit rather than
+through this loop, then order-history linkage and reward-points
+earning/reversal were added on top in a second pass. Recording it here after
+the fact so it isn't permanently absent from the roadmap — see
+`docs/HANDOFF.md` #87–#88 and `docs/API-CONTRACT.md` §6c for what actually
+shipped.
+
+**Scope, as built:**
+- `User`/`AccountSession`/`OAuthState` persistence, `ll_account` cookie, six
+  `/api/account/*` endpoints (signup, login, logout, me, orders, both Google
+  OAuth legs).
+- `Order.userId` (nullable, `SetNull` on delete) links an order to whoever
+  was signed in at checkout. **Going forward only** — no retroactive linking
+  of pre-existing guest orders by matching email, since signup has no
+  email-verification step.
+- `User.rewardPoints`, earned on both card and cash orders from
+  `subtotalCents` at a tunable rate (`reward_points_per_dollar` setting,
+  default 10), reversed symmetrically on refund. Both directions gated on
+  `Order.paidAt`, atomic via a dedicated Postgres function
+  (`adjust_reward_points`), matching how stock/slot capacity are already
+  handled — never a raw increment.
+
+**Explicitly not built:** point redemption. The account page's "Redeem 10
+points → $0.10 off" copy is informational only; spending points at checkout
+needs its own policy decision (interaction with the daily spend cap, what
+happens to spent points on a later refund) before it gets an endpoint.
+
+**Gate, not yet met:** no automated concurrency/replay test suite exists for
+any of this — everything above was verified by hand against the local
+database. Before this counts as hardened the way P3's checkout suite is,
+it needs the same treatment: concurrent cash-collect and webhook-replay
+tests proving points are awarded/reversed exactly once, following the
+existing checkout/webhook concurrency suite as the template.
+
+**Also unresolved from when accounts first landed:** the school's privacy and
+retention policy for student account email addresses (CLAUDE.md §7 — human
+decision, not made here).
 
 ---
 

@@ -9,6 +9,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { logEvent, hashPii } from "@/lib/log";
 import { schoolDayStartInstant, slotStartInstant } from "@/lib/timezone";
 import { createOrderPaymentIntent } from "@/lib/stripe/payments";
+import { getAccountUser } from "@/lib/account-auth";
 import { releaseOrder } from "@/lib/db/release";
 import { sendConfirmationEmail } from "@/lib/email";
 import {
@@ -29,6 +30,11 @@ export const dynamic = "force-dynamic";
 //   5. TRANSACTION         advisory lock (email+day) -> daily spend cap
 //                          -> book_slot -> reserve_stock (sorted) -> create order
 //   6. payment             cash is already done; card opens a PaymentIntent
+//
+// Alongside 1-2, not a numbered step of its own because it gates nothing: a
+// best-effort read of the `ll_account` session (if any) tags the order with
+// its `userId` for order history/reward points. Guest checkout is byte-for-
+// byte unaffected — see the comment at that read.
 //
 // Stock is reserved BEFORE payment on purpose. A student who abandons checkout
 // holds stock until `expiresAt` and the sweep gives it back. The alternative —
@@ -66,6 +72,18 @@ export async function POST(req: NextRequest) {
       });
     }
     const input = parsed.data;
+
+    // ── 1b. Best-effort account attribution. Never gates anything. ───────────
+    // If the browser also carries a valid `ll_account` session, the order it's
+    // about to place gets tagged with that account for order history and
+    // reward points — going forward only, never retroactively (no email
+    // verification exists at signup, so linking by email match would let
+    // anyone see a stranger's history just by signing up with a known email).
+    // Guest checkout — no cookie, an expired one, anything short of a valid
+    // session — must resolve to `null` and change nothing else about this
+    // request; `getAccountUser` already does that, the `.catch` is only so a
+    // future change to it can never take checkout down with it.
+    const accountUser = await getAccountUser(req).catch(() => null);
 
     // ── 2. Rate limit. ────────────────────────────────────────────────────────
     // Two dimensions because they catch different things: the IP limit catches
@@ -247,6 +265,11 @@ export async function POST(req: NextRequest) {
               email: input.email,
               phone: input.phone,
               homeroom: input.homeroom,
+              // null for a guest, or when the session cookie is missing/expired.
+              // Attribution only — never read by any pricing, cap, stock, or
+              // slot logic above, and this transaction behaves identically
+              // whether or not it's set.
+              userId: accountUser?.id ?? null,
               slotId: input.slotId,
               paymentMethod: input.paymentMethod,
               // DELTA FROM backend.md §3, which creates every order PENDING and

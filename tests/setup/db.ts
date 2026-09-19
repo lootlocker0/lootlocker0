@@ -54,8 +54,14 @@ export function prepareSchema(): void {
  * TTL 15 min — and they cannot drift mid-run.
  */
 export async function resetDb(): Promise<void> {
+  // `users` cascades to `account_sessions` (its FK's own ON DELETE has no
+  // bearing on TRUNCATE ... CASCADE, which always follows the FK graph).
+  // `oauth_states` has no FK to `users` and is left alone deliberately: no
+  // test in this suite exercises the Google OAuth token exchange (it needs
+  // real Google credentials this harness does not have), so nothing ever
+  // writes a row there.
   await testDb.$executeRawUnsafe(
-    `TRUNCATE order_items, orders, webhook_events, products, pickup_slots RESTART IDENTITY CASCADE`,
+    `TRUNCATE order_items, orders, webhook_events, products, pickup_slots, users RESTART IDENTITY CASCADE`,
   );
 }
 

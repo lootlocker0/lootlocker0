@@ -4,7 +4,10 @@
 // Prisma 7 does NOT auto-load .env once a config file exists, so we load it
 // here explicitly. Everything downstream (migrate, db seed, studio) inherits
 // the resulting process.env.
-import "dotenv/config";
+import dotenv from "dotenv";
+
+dotenv.config({ path: ".env.local" });
+dotenv.config();
 
 import { defineConfig } from "prisma/config";
 

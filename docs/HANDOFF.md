@@ -3327,7 +3327,149 @@ inline ✘ marks. That mismatch is worth remembering the next time a full
 suite's headline number and its own detail lines disagree: recount before
 trusting either.
 
-## P5 — backend (student account authentication) · 2026-09-16
+## Post-P5 reconciliation — Stripe go-live prep · 2026-09-16
+
+### 83. [manager — HIGH, confirmed] Order cutoff enforcement silently removed from checkout after the P5 sign-off
+
+Three commits landed after item #82's sign-off with no HANDOFF entry and no
+`API-CONTRACT.md` update: `252d0f1` ("add products to the github"),
+`8d09ca9` ("created product page, updated dashboard"), `62ff5b0` ("fix
+header button"). Diffing all three against the documented contract before
+starting the Stripe go-live work, since undocumented changes to
+`app/api/checkout/route.ts` are exactly the kind of thing this section
+exists to catch.
+
+`252d0f1` removed the `PAST_CUTOFF` check from `POST /api/checkout`
+(`app/api/checkout/route.ts`, previously ~lines 142-156): the call to
+`getSetting("order_cutoff_minutes")`, the `slotStartInstant` comparison, and
+the `throw new AppError("PAST_CUTOFF")` are gone, replaced with a comment
+("No checkout cutoff. Customers can place orders for any valid pickup slot
+at any time"). No other file changed to match — `lib/errors.ts` still
+declares `PAST_CUTOFF`, `lib/settings.ts` still has `order_cutoff_minutes` in
+`DEFAULTS`, and `docs/API-CONTRACT.md:579` still documents it as checked
+**before** the spend cap, with `docs/API-CONTRACT.md:1890` recording that
+this exact ordering was deliberately tested and fixed during P3 hardening
+(HANDOFF §31-33). `order_cutoff_minutes` is now dead configuration and
+`PAST_CUTOFF` is unreachable from this route.
+
+This is not being restored or removed here — whether a snack order should
+still be blockable by a cutoff time is a real product decision (adjacent to
+CLAUDE.md §7's "real bell schedule and physical handout throughput per
+slot," which is already flagged as human-owned), not something to infer from
+an undocumented diff. Recording it so the manager/human decides one of:
+(a) this was intentional and `API-CONTRACT.md` §"Endpoint contract" and the
+error-code table should be updated to match, with the now-dead
+`order_cutoff_minutes` setting and `PAST_CUTOFF` code either removed or kept
+inert on purpose, or (b) this was an accidental regression and the check
+should be restored to what P3 tested and shipped.
+
+Everything else in the three commits reviewed clean against the contract:
+the `sizeProduct` schema addition (see #84), the new
+`POST /api/inventory/images` upload endpoint, and the `Nav.tsx`/
+`package-lock.json` changes in `62ff5b0` are additive and don't change any
+documented request/response shape or status code.
+
+### 84. [manager — LOW, confirmed] `sizeProduct` shipped on `Product` and `GET /api/products` with no contract entry
+
+`252d0f1` added `sizeProduct String?` to the `Product` model (migration
+`20260905065612_add_size_product`), backfilled it through `prisma/seed.ts`,
+and exposed it on `GET /api/products`'s `PRODUCT_FIELDS` projection
+(`app/api/products/route.ts:21`). Non-breaking (additive, nullable field on
+an existing endpoint) but undocumented: `docs/API-CONTRACT.md` has no
+`sizeProduct` entry anywhere. Flagging for whoever next touches
+`API-CONTRACT.md`'s product/catalog section to add one line documenting the
+field (optional pack/unit-size string, e.g. "12-pack", surfaced read-only to
+shoppers) — not doing it inline here since it's outside this session's scope
+(Stripe go-live), and touching `docs/API-CONTRACT.md` for an unrelated field
+in the same pass as the Stripe entry below would blur two independent
+changes into one diff.
+
+### 85. [manager] Stripe go-live (test mode): simulator off, real transaction placed and refunded end to end
+
+Following up on #83/#84's reconciliation. `STRIPE_SECRET_KEY` and
+`NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY` were set in local `.env.local` (a real
+Stripe test-mode key pair — never committed, never logged, only the env var
+*names* appear here). `lib/stripe/payments.ts`'s `SIMULATED` flag went false
+immediately, no code or flag change needed: `logEvent("stripe_mode", ...)`
+confirmed `"mode":"live"` on the next request that touched the module.
+
+Installed the Stripe CLI (`brew install stripe/stripe-cli/stripe`) and ran
+`stripe listen --api-key <redacted> --forward-to localhost:3000/api/webhooks/stripe`
+(headless, no `stripe login` needed). Its printed signing secret went into
+`STRIPE_WEBHOOK_SECRET`, dev server restarted to pick it up.
+
+**Sanity triggers** (`stripe trigger payment_intent.succeeded`,
+`stripe trigger charge.refunded`) — all forwarded events returned `200`, no
+signature-verification errors. Handled types processed cleanly with the
+existing orphan-safe logging (`webhook_orphan_intent`,
+`webhook_orphan_refund` — expected, since these synthetic fixtures don't
+match a real order); everything else logged `webhook_unhandled` and was
+correctly ignored.
+
+**Full end-to-end dry run, a real order, no shortcuts:**
+1. `POST /api/checkout` (CARD, one Gatorade Fruit Punch, 300¢) →
+   order `LL-26450`, `PENDING`, real PaymentIntent
+   `pi_3UGX5q2RQPidmIXn1lrOVQGO`.
+2. Confirmed that PaymentIntent directly against the real Stripe test API
+   (`POST /v1/payment_intents/{id}/confirm`, `payment_method=pm_card_visa`,
+   `return_url` supplied) — `amount_received: 300`, `status: succeeded`. This
+   is Stripe's own server-side test-card confirmation, equivalent to what
+   Stripe.js does in the browser, without needing a browser session.
+3. Real `payment_intent.succeeded` webhook arrived, signature verified,
+   `order_paid` logged, order flipped `PENDING`→`PAID`, pickup code `FMRC`
+   issued. `GET /api/orders/LL-26450` reflected `PAID` immediately.
+4. Logged in to `/api/admin/login` with `ADMIN_PASSCODE`, called
+   `POST /api/admin/orders/LL-26450/refund` — real `refunds.create` against
+   Stripe, `refundedCents: 300`, `alreadyRefundedAtStripe: false`.
+5. The trailing `charge.refunded` webhook arrived after the order was already
+   `REFUNDED` (the admin route flips it synchronously, per its own documented
+   step-2-then-3 ordering) and correctly no-op'd (`webhook_noop`,
+   `status: REFUNDED`) rather than double-processing — the idempotent design
+   working exactly as documented, not just as tested.
+
+This satisfies BUILDPLAN.md's P5 "Stripe" checklist line "one real
+transaction placed and refunded end to end," in test mode. `BUILDPLAN.md`
+updated to check that line, the webhook-registration line (local, test
+mode), and the statement-descriptor line — "Live keys swapped in" and "Radar
+rules reviewed" are deliberately left unchecked: both require real
+`sk_live_`/`pk_live_` keys and a production decision, neither of which this
+session has.
+
+**Not done, and why:** no deployed environment exists yet (no `vercel`
+CLI link, no evidence of a live deployment) — registering a webhook endpoint
+against a real deployed URL (BUILDPLAN's "Deployed-environment wiring" step)
+is deferred until there is a URL to register. When that exists: set both
+keys in the platform's env config, register a Stripe Dashboard (test mode)
+webhook endpoint at `https://<host>/api/webhooks/stripe` subscribed to
+exactly `payment_intent.succeeded`, `payment_intent.payment_failed`,
+`payment_intent.canceled`, `charge.refunded`, put its signing secret in
+`STRIPE_WEBHOOK_SECRET` on the platform, and repeat this entry's log check
+against deployed logs.
+
+**Also surfaced, out of scope for this entry:** step 3 above logged
+`confirmation_email_not_sent` / `reason: "not_implemented"` — order
+confirmation emails are not yet wired up (`lib/email.ts`). Not a Stripe or
+catalog concern; flagging so it doesn't get lost.
+
+### 86. [manager] Apple Pay: already supported by the existing checkout, only domain registration was missing — confirmed working in Safari on macOS and iOS
+
+Following on from #85. No checkout code changed for this — `components/checkout/PaymentStep.tsx` already renders Stripe's `<PaymentElement>` (not the legacy Card Element), and `lib/stripe/payments.ts:85` already creates every PaymentIntent with `automatic_payment_methods: { enabled: true }`. That combination is exactly what's required for Apple Pay (and Google Pay) to surface automatically — Stripe handles Apple's merchant validation entirely server-side, no Apple Merchant ID or CSR needed on our end.
+
+The one real gap: Stripe requires every serving domain to be registered for wallet payment methods when using Elements (unlike Stripe Checkout, which needs none of this). `lootlockers.ca` (from `NEXT_PUBLIC_SITE_URL`) is now registered via `POST /v1/payment_method_domains` — **test mode only**, `apple_pay: {status: "active"}`, confirmed by listing the account's domains afterward. This means the moment the site is actually deployed to that domain, Apple Pay will render with no further setup, in test mode.
+
+`"localhost"` cannot be registered for Apple Pay at all — Stripe rejects it outright (`apple_pay.status: "inactive"`, `"You passed an invalid URI for your domain name... should be just a bare top-level domain"`). Confirmed by trying it directly. Real local testing needs a real HTTPS-reachable domain, per Stripe's own documented guidance (they suggest ngrok; used a Cloudflare quick tunnel instead — no signup required).
+
+**What was actually tested, not just configured:** started a `cloudflared tunnel --url http://localhost:3000` quick tunnel (installed via `brew install cloudflared`), registered its generated hostname the same way, and hit a second, unrelated bug immediately: the tunnel's page loaded (200 OK) but **no button did anything** — the exact symptom already documented in #75, one layer further. `next dev`'s `blockCrossSiteDEV()` guard doesn't only trip on `127.0.0.1` vs `localhost`; any origin the dev server doesn't recognize gets the same treatment, silently killing the HMR websocket upgrade and leaving the page permanently unhydrated. Fixed for the duration of the test by adding the tunnel's hostname to `allowedDevOrigins` in `next.config.ts` and restarting the dev server — reverted immediately after, since a Cloudflare quick tunnel's hostname is random per run and there is nothing fixed worth committing. **Worth generalizing #75's lesson:** it is not a `127.0.0.1`-specific quirk, it is "any origin `next dev` doesn't already know about," and `allowedDevOrigins` is the fix whenever that origin is a real one on purpose (a tunnel, a LAN IP, a preview host) rather than a mistake.
+
+With that fixed, the Apple Pay button was confirmed rendering and functional in Safari on both macOS and iOS, against the tunnel domain, in test mode.
+
+**Cleaned up after the test**, so nothing test-only was left live: the tunnel process stopped, its domain registration and the earlier `localhost` one both disabled (`enabled: false`, not deleted — Stripe's API has no delete for `PaymentMethodDomain`, only enable/disable) via `POST /v1/payment_method_domains/{id}`, and `next.config.ts` reverted to exactly its prior state (`git diff` clean). `lootlockers.ca`'s registration is the only one left active, deliberately, since it's real prep for the actual deployment.
+
+**Still open, added to `BUILDPLAN.md`'s P5 Stripe checklist:** the `lootlockers.ca` domain registration above is test-mode only (it was created using the `sk_test_...` key). Stripe requires the identical registration to be repeated with live keys before going live — it does not carry over from test mode automatically.
+
+**Also worth noting for whoever deploys next:** while investigating, confirmed the account behind the project's `sk_test_...`/`pk_test_...` key pair (`acct_1UG5S82RQPidmIXn`) is a **different Stripe account** from the one connected to this session's Stripe Claude Code plugin (`acct_1UG5RzCntKQclbON`, "Loot Locker"). All Stripe API calls in this session and #85 used the project's own key directly over HTTP, never the plugin's tools, specifically to avoid writing to the wrong account. Anyone using the Stripe plugin/MCP tools on this project going forward should switch its connected account first, or keep using direct API calls with the project's own key.
+
+### 87. [backend] Student account authentication — signup, login, Google OAuth, reward-points balance · 2026-09-16
 
 Added `User`, `AccountSession`, and `OAuthState` persistence plus the six
 `/api/account/*` endpoints documented in `docs/API-CONTRACT.md` §6c. Passwords
@@ -3347,3 +3489,161 @@ QA concurrency and replay targets:
   session row is gone.
 - Expired sessions and OAuth states are rejected by time checks. Cleanup of
   old rows is optional maintenance and is not part of request authorization.
+
+**Addendum, this pass:** `docs/API-CONTRACT.md` §6c had landed spliced into
+the middle of §2's error-code table (between the table and the paragraph
+explaining `ORDER_NOT_FOUND`), rather than after §6b where every other
+lettered subsection of §6 lives. Relocated to its correct position; content
+otherwise unchanged except for the additions in #88. The five account error
+codes it documents (`ACCOUNT_UNAUTHORIZED`, `ACCOUNT_NOT_CONFIGURED`,
+`OAUTH_FAILED`, `USERNAME_TAKEN`, `EMAIL_TAKEN`) were also missing from §2's
+shared table and have been added there.
+
+### 88. [backend] Orders linked to accounts; reward points earned/reversed on both card and cash
+
+Built on #87. `Order` gained a nullable `userId` (migration
+`20260918040959_link_orders_to_accounts`, `SetNull` on delete — deleting a
+`User` must never delete a real financial record). Checkout attributes a new
+order to the signed-in account with a best-effort, non-throwing read of
+`ll_account` before the transaction; a missing/expired cookie behaves
+identically to today's guest checkout in every other respect. **No
+retroactive linking**: only orders placed while signed in, from now on,
+count — signup has no email-verification step, so linking by email match
+would let anyone see a stranger's order history by signing up with a known
+email.
+
+Reward points (`User.rewardPoints`, already existed and already displayed —
+see #87) are now real:
+
+- Earned on **both** card and cash orders, on `subtotalCents` (pre-tax), at
+  `reward_points_per_dollar` (new `Setting`, default 10 — matches the rate
+  already shown in shipped UI copy, `lib/settings.ts`).
+- Trigger is `paidAt` going from null to set, **never `status` alone** — a
+  cash order can reach `PACKED` with `paidAt` still null
+  (`app/api/admin/orders/[orderNumber]/cash/route.ts`'s own header explains
+  why `paidAt` is the money fact and `status` is the fulfilment fact). Every
+  award/reversal gate in this change reads `paidAt`, matching that rule.
+- New `adjust_reward_points(user_id, delta)` Postgres function
+  (`manual_constraints.sql`, section 5), mirroring `adjust_stock()` exactly —
+  bounds-checked at zero in the same `UPDATE`, never a raw Prisma
+  increment/decrement.
+- Award and reversal each run inside the same transaction as the write that
+  actually flips `paidAt`/`status`:
+  - Webhook `onPaid` and `onRefunded` were previously bare sequential
+    `db.*` calls (the `updateMany` conditional was the only idempotency
+    guard); both now wrap that guard together with the points call in one
+    `db.$transaction`.
+  - The cash route's two mutually-exclusive `updateMany` branches
+    ("promoted"/"stamped") didn't need a transaction between themselves —
+    they still don't — but now compose with a third write (the points
+    award), so the whole block is wrapped in one `db.$transaction`; the
+    stale comment claiming no transaction was needed is updated to say why
+    that reasoning no longer covers the whole block.
+  - The admin refund route already used a transaction; the reversal call was
+    added inside it, gated on `order.paidAt` (added to `ADMIN_ORDER_SELECT`
+    in `lib/db/admin.ts`, alongside `userId`) rather than
+    `order.status` — `REFUNDABLE_FROM` includes `PACKED`, which a cash order
+    can reach with `paidAt` still null, so a status-only gate would have
+    reversed points that were never awarded.
+- New `GET /api/account/orders` (hard `ACCOUNT_UNAUTHORIZED` if not signed
+  in, unlike checkout's optional read) lists the signed-in account's own
+  orders. `components/account/LockerSignIn.tsx` renders them in a new
+  section using `AngledPanel` (the existing profile/rewards cards were left
+  on their pre-existing raw `clip-*` classes — not converted, to keep this
+  change's diff scoped to what's new).
+
+**Not built, deliberately:** redemption. The existing "Redeem 10 points →
+$0.10 off" copy stays informational; no endpoint accepts a points amount, and
+none of this change touches checkout pricing.
+
+**Not tested by an automated suite in this pass** — verified manually against
+the local dev database and `tsc`/`eslint` only:
+- Concurrent cash-collect double-press awarding points exactly once.
+- Two webhook deliveries for one PaymentIntent awarding points exactly once.
+- A refund reversing points exactly once, via both the webhook and the admin
+  refund path, without double-reversing if both fire for the same order.
+- A `PACKED`-but-never-cash-collected order refunded via the admin route
+  reversing zero points.
+- `adjust_reward_points` clamping at zero via a direct `psql` call.
+
+Whoever picks this up next should add these as real `vitest`/concurrency
+tests before treating this as P5-hardened — the pattern to follow is the
+existing checkout/webhook concurrency suite, not a new one invented from
+scratch.
+
+### 89. [qa] Automated tests for #88 (orders↔accounts, reward points), plus a real bug found and fixed along the way
+
+Added `tests/unit/rewards.test.ts` (the `pointsForSubtotal` formula, pure),
+`tests/concurrency/rewards.test.ts` (award/reversal idempotency: concurrent
+webhook replay, a triple-pressed cash-collect button, a manual refund racing
+`charge.refunded`, the PACKED-but-never-paid case reversing nothing, `adjust_reward_points`
+clamping at zero via a direct call), and `tests/api/account.test.ts`
+(signup/login/logout, `GET /api/account/orders` — auth-required, PII-free,
+no retroactive linking, reflects status changes). 154 tests in `tests/concurrency`
++ `tests/api` now pass (151 pass; the pre-existing 3 `PAST_CUTOFF` failures in
+`tests/api/money.test.ts` are #83's already-documented drift, not this change).
+
+**Infra needed and added:**
+- `tests/setup/db.ts`'s `resetDb()` now also truncates `users` (cascades to
+  `account_sessions`; `oauth_states` has no FK to `users` and is left alone
+  since nothing in this suite exercises the Google token exchange).
+- `tests/helpers.ts` gained `signupAccount()`, `getAccountMe()`,
+  `getAccountOrders()`, and `seedPendingCardOrder({ accountCookie })`.
+- The local machine had no `looplockers`/`looplockers_test` role+database yet
+  (`tests/setup/env.ts`'s default) — created once, matching that file's
+  documented default credentials.
+- Running this suite in the isolated `QA_PROJECT_DIR` mirror (needed here
+  since a `next dev` was already running on port 3000 for the same project
+  directory) requires manually placing a `.env.local` in the mirror —
+  `project-dir.ts` deliberately doesn't copy the real one — and exporting
+  `ADMIN_PASSCODE`/`INVENTORY_PASSCODE` into the shell running vitest itself,
+  since `tests/helpers.ts`'s constants read those from the test runner's own
+  `process.env`, not the spawned server's.
+
+**A real, deterministic bug found while writing the duplicate-signup test,
+fixed in `app/api/account/signup/route.ts`:** every username/email conflict
+returned `EMAIL_TAKEN`, even for a username-only collision. Cause: Prisma 7's
+pg driver adapter (`lib/db.ts`'s own "DELTA FROM CLAUDE.md §4" note) nests the
+real constraint name under `meta.driverAdapterError.cause`, not the flat
+`meta.target` the original code checked — which is `undefined` under this
+adapter, so `target.includes("username")` was always false. Fixed to check
+the constraint index name and the raw Postgres message too. Verified directly
+against a real signup conflict in both directions before and after.
+
+**Also created `lib/rewards-formula.ts`**, splitting `pointsForSubtotal` out
+of `lib/rewards.ts` — the latter imports `lib/settings.ts` → `lib/db.ts`,
+which throws without `DATABASE_URL`, so the pure formula couldn't be unit
+tested (`QA_NO_SERVER=1`, no database at all) while living in the same file.
+Same reasoning `lib/money.ts` already has zero imports for.
+
+**Not covered by this pass:** the Google OAuth token-exchange flow (needs
+real Google credentials this harness doesn't have) and E2E/browser tests for
+the new order-history UI section in `LockerSignIn.tsx`.
+
+### 90. [backend] `User.name` — Google's real display name, kept separate from the compressed `username`
+
+Google sign-in was live (#87–#89) but discarded `profile.name` entirely,
+using it only to derive `username` (lower-case, no spaces, unique) — so a
+signed-in page rendered "tahmeedhossain" where it should have shown "Tahmeed
+Hossain." Added `User.name String?` (migration `20260918054647_add_user_display_name`),
+populated from Google's profile on create, and backfilled on an existing
+account's next Google login if it was never set (never overwritten once
+present — a login isn't allowed to second-guess a name already recorded).
+Null for password signups; that form never collects one.
+
+Every display surface now reads `name ?? username`:
+`components/account/LockerSignIn.tsx`'s welcome header and profile card, and
+`accountUserSelect`/`AccountUser` (`lib/account-auth.ts`) plus the manual
+shape built in `app/api/account/login/route.ts`.
+
+Also added: `components/checkout/CheckoutForm.tsx` now best-effort prefills
+`studentName`/`email` from `/api/account/me` on mount if signed in — never
+overwrites something already typed (checked via a functional `setState` read
+at resolve time, not render time), and a failed/401 fetch (guest checkout)
+silently no-ops.
+
+**Not done in this pass:** no automated test added for either the name
+backfill or the checkout prefill — verified by hand against the local
+database and the running dev server only. Worth a `tests/api/account.test.ts`
+addition and a `tests/e2e/checkout.spec.ts` addition respectively before
+calling this hardened.

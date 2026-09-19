@@ -40,8 +40,28 @@ export async function POST(req: NextRequest) {
       select: accountUserSelect,
     }).catch((error: unknown) => {
       if ((error as { code?: string })?.code === "P2002") {
-        const target = String((error as { meta?: { target?: unknown } }).meta?.target ?? "");
-        throw new AppError(target.includes("username") ? "USERNAME_TAKEN" : "EMAIL_TAKEN");
+        // Prisma 7 + the pg driver adapter nests the real constraint name
+        // under `meta.driverAdapterError.cause`, not the flat `meta.target`
+        // string/array Prisma's built-in query engine used to report — see
+        // lib/db.ts's "DELTA FROM CLAUDE.md §4" note on the same adapter
+        // migration. `meta.target` is `undefined` under this adapter, so
+        // checking it alone always fell through to EMAIL_TAKEN, even for a
+        // username-only collision. Both the constraint's index name
+        // ("users_username_key") and the raw Postgres error message contain
+        // the column name; checking both is belt-and-suspenders against
+        // either shape changing again.
+        const meta = (error as { meta?: Record<string, unknown> }).meta ?? {};
+        const driverCause = (
+          meta.driverAdapterError as { cause?: Record<string, unknown> } | undefined
+        )?.cause;
+        const haystack = [
+          meta.target,
+          (driverCause?.constraint as { index?: unknown } | undefined)?.index,
+          driverCause?.originalMessage,
+        ]
+          .map((v) => String(v ?? ""))
+          .join(" ");
+        throw new AppError(haystack.includes("username") ? "USERNAME_TAKEN" : "EMAIL_TAKEN");
       }
       throw error;
     });
