@@ -5,6 +5,7 @@ import { logEvent } from "@/lib/log";
 import { requireAdminSession } from "@/lib/admin-session";
 import { adminCashSchema } from "@/lib/validation";
 import { assertPickupCodeMatches, loadAdminOrder } from "@/lib/db/admin";
+import { awardRewardPoints, getPointsPerDollar, pointsForSubtotal } from "@/lib/rewards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -77,6 +78,12 @@ export async function POST(
 
     const paidAt = new Date();
 
+    // Computed before the transaction (a plain settings read), awarded inside
+    // it, only if this call is the one that actually records the money.
+    const pointsToAward = order.userId
+      ? pointsForSubtotal(order.subtotalCents, await getPointsPerDollar())
+      : 0;
+
     // ── Exactly-once, by the WHERE clause. ───────────────────────────────────
     // `paidAt: null` is what makes this idempotent: a double-pressed button, or
     // two staff phones, produce one UPDATE that matches a row and one that
@@ -85,34 +92,46 @@ export async function POST(
     //
     // Two statements rather than one because the two transitions write
     // different things (see the header). They are mutually exclusive on
-    // `status`, so no transaction is needed to keep them from both firing —
-    // and the second only runs if the first matched nothing.
-    const promoted = await db.order.updateMany({
-      where: {
-        id: order.id,
-        paymentMethod: "CASH_AT_PICKUP",
-        paidAt: null,
-        status: "RESERVED",
-      },
-      data: { status: "PAID", paidAt },
-    });
-
-    let changed = promoted.count === 1;
-
-    if (!changed) {
-      // Already packed or already handed over: record the money, leave the
-      // fulfilment state where it is.
-      const stamped = await db.order.updateMany({
+    // `status`, which is why *they* don't need a transaction between
+    // themselves — the second only runs if the first matched nothing. But
+    // awarding reward points is a third write that must succeed or fail
+    // together with whichever branch fires (a crash in between would record
+    // the money with no points to show for it, and nothing here would ever
+    // retry), so the whole block is wrapped in one `db.$transaction`.
+    const changed = await db.$transaction(async (tx) => {
+      const promoted = await tx.order.updateMany({
         where: {
           id: order.id,
           paymentMethod: "CASH_AT_PICKUP",
           paidAt: null,
-          status: { in: ["PACKED", "PICKED_UP"] },
+          status: "RESERVED",
         },
-        data: { paidAt },
+        data: { status: "PAID", paidAt },
       });
-      changed = stamped.count === 1;
-    }
+
+      let changed = promoted.count === 1;
+
+      if (!changed) {
+        // Already packed or already handed over: record the money, leave the
+        // fulfilment state where it is.
+        const stamped = await tx.order.updateMany({
+          where: {
+            id: order.id,
+            paymentMethod: "CASH_AT_PICKUP",
+            paidAt: null,
+            status: { in: ["PACKED", "PICKED_UP"] },
+          },
+          data: { paidAt },
+        });
+        changed = stamped.count === 1;
+      }
+
+      if (changed && order.userId) {
+        await awardRewardPoints(tx, order.userId, pointsToAward);
+      }
+
+      return changed;
+    });
 
     // One authoritative re-read, so the response reports what the database
     // actually holds rather than what this handler intended.
@@ -140,6 +159,13 @@ export async function POST(
         sessionId,
         totalCents: now.totalCents,
       });
+      if (order.userId && pointsToAward > 0) {
+        logEvent("reward_points_awarded", {
+          orderId: order.id,
+          userId: order.userId,
+          points: pointsToAward,
+        });
+      }
     }
 
     return Response.json(

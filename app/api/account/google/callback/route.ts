@@ -24,20 +24,39 @@ function usernameBase(email: string, name: unknown): string {
   return base.length >= 3 ? base : `locker${email.replace(/[^a-z0-9]/gi, "").slice(0, 20)}`;
 }
 
+/// Google's real, properly-spaced/-cased display name ("Tahmeed Hossain"),
+/// kept separate from `username` (the compressed, unique login handle
+/// `usernameBase` derives from it). Every display surface must read
+/// `name ?? username`, not `username` alone — see the field's schema comment.
+function displayName(name: unknown): string | null {
+  return typeof name === "string" && name.trim() ? name.trim().slice(0, 80) : null;
+}
+
 async function upsertGoogleUser(profile: GoogleProfile) {
   if (typeof profile.sub !== "string" || typeof profile.email !== "string" || profile.email_verified !== true) {
     throw new AppError("OAUTH_FAILED");
   }
   const email = profile.email.trim().toLowerCase();
+  const name = displayName(profile.name);
+
   const existingGoogle = await db.user.findUnique({ where: { googleId: profile.sub } });
-  if (existingGoogle) return db.user.findUniqueOrThrow({ where: { id: existingGoogle.id }, select: accountUserSelect });
+  if (existingGoogle) {
+    // Backfill for an account created before this field existed, or whose
+    // name was never captured on an earlier login — never overwrite one
+    // that's already set (Google's name could change; the account owner's
+    // idea of their name, once recorded, isn't second-guessed by a login).
+    if (!existingGoogle.name && name) {
+      return db.user.update({ where: { id: existingGoogle.id }, data: { name }, select: accountUserSelect });
+    }
+    return db.user.findUniqueOrThrow({ where: { id: existingGoogle.id }, select: accountUserSelect });
+  }
 
   const existingEmail = await db.user.findUnique({ where: { email } });
   if (existingEmail) {
     if (existingEmail.googleId && existingEmail.googleId !== profile.sub) throw new AppError("OAUTH_FAILED");
     return db.user.update({
       where: { id: existingEmail.id },
-      data: { googleId: profile.sub },
+      data: { googleId: profile.sub, ...(!existingEmail.name && name ? { name } : {}) },
       select: accountUserSelect,
     });
   }
@@ -47,7 +66,7 @@ async function upsertGoogleUser(profile: GoogleProfile) {
     const username = `${base}${suffix ? suffix : ""}`.slice(0, 30);
     try {
       return await db.user.create({
-        data: { username, email, googleId: profile.sub },
+        data: { username, name, email, googleId: profile.sub },
         select: accountUserSelect,
       });
     } catch (error) {

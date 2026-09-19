@@ -13,6 +13,7 @@ const IS_PROD = process.env.NODE_ENV === "production";
 export const accountUserSelect = {
   id: true,
   username: true,
+  name: true,
   email: true,
   rewardPoints: true,
 } as const;
@@ -20,6 +21,7 @@ export const accountUserSelect = {
 export type AccountUser = {
   id: string;
   username: string;
+  name: string | null;
   email: string;
   rewardPoints: number;
 };

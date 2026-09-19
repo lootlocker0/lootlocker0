@@ -37,6 +37,11 @@ const ADMIN_ORDER_SELECT = {
   pickupCode: true,
   studentName: true,
   homeroom: true,
+  // Not PII (an internal account reference, not a name/email/phone) — needed
+  // by the cash and refund routes to award/reverse reward points. Routes in
+  // this namespace build explicit response bodies rather than spreading
+  // `order`, so adding this field here does not put it in front of staff.
+  userId: true,
   status: true,
   paymentMethod: true,
   subtotalCents: true,

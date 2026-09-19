@@ -240,4 +240,61 @@ $$;
 COMMENT ON FUNCTION adjust_stock(text, int) IS
   'Atomically applies a signed delta to product stock. Returns the new stock_qty, or NULL if the product is missing or the change would go negative. Ignores active. Check and write happen in one UPDATE; never replace with a read-then-write.';
 
+-- ─────────────────────────────────────────────────────────────────────────────
+-- 5. Atomic reward-points adjustment
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- Applies a RELATIVE change to a user's reward-points balance and returns the
+-- new balance, or NULL if nothing was changed (user missing, or the change
+-- would take the balance below zero).
+--
+-- Same shape and the same reason as adjust_stock(): the bound check and the
+-- write are one UPDATE, so an award (webhook onPaid, cash collection) and a
+-- reversal (webhook onRefunded, admin refund) landing in the same millisecond
+-- compose instead of clobbering each other. This function is called from
+-- both directions:
+--
+--   · Award  (positive delta) — webhook `onPaid`, the cash-collection route.
+--     Both gate the call on the order's `paid_at` having just been set for
+--     the first time, never on `status` alone (a cash order can reach PACKED
+--     with `paid_at` still NULL).
+--   · Reversal (negative delta) — webhook `onRefunded`, the admin refund
+--     route. Both gate the call on the order's `paid_at` having been set
+--     BEFORE the refund write, for the same reason.
+--
+-- Reward points must never be adjusted via a raw Prisma increment/decrement —
+-- always through this function, so the floor at zero is enforced at the
+-- database, not by caller discipline.
+--
+-- It deliberately CANNOT distinguish "no such user" from "would go negative":
+-- both are NULL. The caller re-reads for a human-readable message only, and
+-- that read is diagnostic — the decision was already made here.
+CREATE OR REPLACE FUNCTION adjust_reward_points(p_user_id text, p_delta int)
+RETURNS int
+LANGUAGE plpgsql
+VOLATILE
+AS $$
+DECLARE
+  v_new int;
+BEGIN
+  -- A zero delta would report success for a write that never happened.
+  IF p_delta IS NULL OR p_delta = 0 THEN
+    RETURN NULL;
+  END IF;
+
+  UPDATE users
+     SET reward_points = reward_points + p_delta,
+         updated_at    = now()
+   WHERE id = p_user_id
+     AND reward_points + p_delta >= 0
+  RETURNING reward_points INTO v_new;
+
+  -- NULL when the UPDATE matched no row.
+  RETURN v_new;
+END;
+$$;
+
+COMMENT ON FUNCTION adjust_reward_points(text, int) IS
+  'Atomically applies a signed delta to a user''s reward_points. Returns the new balance, or NULL if the user is missing or the change would go negative. Called for both award (positive) and reversal (negative). Check and write happen in one UPDATE; never replace with a read-then-write or a raw Prisma increment/decrement.';
+
 COMMIT;

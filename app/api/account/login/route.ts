@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
     }
     const cookie = await createAccountSession(user.id);
     const response = NextResponse.json(
-      publicAccountUser({ id: user.id, username: user.username, email: user.email, rewardPoints: user.rewardPoints }),
+      publicAccountUser({ id: user.id, username: user.username, name: user.name, email: user.email, rewardPoints: user.rewardPoints }),
       { headers: { "Cache-Control": "no-store" } },
     );
     response.cookies.set(cookie);

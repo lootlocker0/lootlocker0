@@ -270,6 +270,49 @@ Then the manual list. These are yours, not an agent's.
 
 ---
 
+## P6 · Accounts and reward points — new requirement, undocumented until now
+
+Not in the original phase plan. A student/customer account system (email
+password signup+login, Google OAuth) landed via a direct commit rather than
+through this loop, then order-history linkage and reward-points
+earning/reversal were added on top in a second pass. Recording it here after
+the fact so it isn't permanently absent from the roadmap — see
+`docs/HANDOFF.md` #87–#88 and `docs/API-CONTRACT.md` §6c for what actually
+shipped.
+
+**Scope, as built:**
+- `User`/`AccountSession`/`OAuthState` persistence, `ll_account` cookie, six
+  `/api/account/*` endpoints (signup, login, logout, me, orders, both Google
+  OAuth legs).
+- `Order.userId` (nullable, `SetNull` on delete) links an order to whoever
+  was signed in at checkout. **Going forward only** — no retroactive linking
+  of pre-existing guest orders by matching email, since signup has no
+  email-verification step.
+- `User.rewardPoints`, earned on both card and cash orders from
+  `subtotalCents` at a tunable rate (`reward_points_per_dollar` setting,
+  default 10), reversed symmetrically on refund. Both directions gated on
+  `Order.paidAt`, atomic via a dedicated Postgres function
+  (`adjust_reward_points`), matching how stock/slot capacity are already
+  handled — never a raw increment.
+
+**Explicitly not built:** point redemption. The account page's "Redeem 10
+points → $0.10 off" copy is informational only; spending points at checkout
+needs its own policy decision (interaction with the daily spend cap, what
+happens to spent points on a later refund) before it gets an endpoint.
+
+**Gate, not yet met:** no automated concurrency/replay test suite exists for
+any of this — everything above was verified by hand against the local
+database. Before this counts as hardened the way P3's checkout suite is,
+it needs the same treatment: concurrent cash-collect and webhook-replay
+tests proving points are awarded/reversed exactly once, following the
+existing checkout/webhook concurrency suite as the template.
+
+**Also unresolved from when accounts first landed:** the school's privacy and
+retention policy for student account email addresses (CLAUDE.md §7 — human
+decision, not made here).
+
+---
+
 ## Running the loop
 
 Each phase: dispatch → read `HANDOFF.md` → resolve blockers → run the gate →

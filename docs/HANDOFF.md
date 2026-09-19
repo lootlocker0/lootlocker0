@@ -3468,7 +3468,8 @@ With that fixed, the Apple Pay button was confirmed rendering and functional in 
 **Still open, added to `BUILDPLAN.md`'s P5 Stripe checklist:** the `lootlockers.ca` domain registration above is test-mode only (it was created using the `sk_test_...` key). Stripe requires the identical registration to be repeated with live keys before going live — it does not carry over from test mode automatically.
 
 **Also worth noting for whoever deploys next:** while investigating, confirmed the account behind the project's `sk_test_...`/`pk_test_...` key pair (`acct_1UG5S82RQPidmIXn`) is a **different Stripe account** from the one connected to this session's Stripe Claude Code plugin (`acct_1UG5RzCntKQclbON`, "Loot Locker"). All Stripe API calls in this session and #85 used the project's own key directly over HTTP, never the plugin's tools, specifically to avoid writing to the wrong account. Anyone using the Stripe plugin/MCP tools on this project going forward should switch its connected account first, or keep using direct API calls with the project's own key.
-## P5 — backend (student account authentication) · 2026-09-16
+
+### 87. [backend] Student account authentication — signup, login, Google OAuth, reward-points balance · 2026-09-16
 
 Added `User`, `AccountSession`, and `OAuthState` persistence plus the six
 `/api/account/*` endpoints documented in `docs/API-CONTRACT.md` §6c. Passwords
@@ -3488,3 +3489,161 @@ QA concurrency and replay targets:
   session row is gone.
 - Expired sessions and OAuth states are rejected by time checks. Cleanup of
   old rows is optional maintenance and is not part of request authorization.
+
+**Addendum, this pass:** `docs/API-CONTRACT.md` §6c had landed spliced into
+the middle of §2's error-code table (between the table and the paragraph
+explaining `ORDER_NOT_FOUND`), rather than after §6b where every other
+lettered subsection of §6 lives. Relocated to its correct position; content
+otherwise unchanged except for the additions in #88. The five account error
+codes it documents (`ACCOUNT_UNAUTHORIZED`, `ACCOUNT_NOT_CONFIGURED`,
+`OAUTH_FAILED`, `USERNAME_TAKEN`, `EMAIL_TAKEN`) were also missing from §2's
+shared table and have been added there.
+
+### 88. [backend] Orders linked to accounts; reward points earned/reversed on both card and cash
+
+Built on #87. `Order` gained a nullable `userId` (migration
+`20260918040959_link_orders_to_accounts`, `SetNull` on delete — deleting a
+`User` must never delete a real financial record). Checkout attributes a new
+order to the signed-in account with a best-effort, non-throwing read of
+`ll_account` before the transaction; a missing/expired cookie behaves
+identically to today's guest checkout in every other respect. **No
+retroactive linking**: only orders placed while signed in, from now on,
+count — signup has no email-verification step, so linking by email match
+would let anyone see a stranger's order history by signing up with a known
+email.
+
+Reward points (`User.rewardPoints`, already existed and already displayed —
+see #87) are now real:
+
+- Earned on **both** card and cash orders, on `subtotalCents` (pre-tax), at
+  `reward_points_per_dollar` (new `Setting`, default 10 — matches the rate
+  already shown in shipped UI copy, `lib/settings.ts`).
+- Trigger is `paidAt` going from null to set, **never `status` alone** — a
+  cash order can reach `PACKED` with `paidAt` still null
+  (`app/api/admin/orders/[orderNumber]/cash/route.ts`'s own header explains
+  why `paidAt` is the money fact and `status` is the fulfilment fact). Every
+  award/reversal gate in this change reads `paidAt`, matching that rule.
+- New `adjust_reward_points(user_id, delta)` Postgres function
+  (`manual_constraints.sql`, section 5), mirroring `adjust_stock()` exactly —
+  bounds-checked at zero in the same `UPDATE`, never a raw Prisma
+  increment/decrement.
+- Award and reversal each run inside the same transaction as the write that
+  actually flips `paidAt`/`status`:
+  - Webhook `onPaid` and `onRefunded` were previously bare sequential
+    `db.*` calls (the `updateMany` conditional was the only idempotency
+    guard); both now wrap that guard together with the points call in one
+    `db.$transaction`.
+  - The cash route's two mutually-exclusive `updateMany` branches
+    ("promoted"/"stamped") didn't need a transaction between themselves —
+    they still don't — but now compose with a third write (the points
+    award), so the whole block is wrapped in one `db.$transaction`; the
+    stale comment claiming no transaction was needed is updated to say why
+    that reasoning no longer covers the whole block.
+  - The admin refund route already used a transaction; the reversal call was
+    added inside it, gated on `order.paidAt` (added to `ADMIN_ORDER_SELECT`
+    in `lib/db/admin.ts`, alongside `userId`) rather than
+    `order.status` — `REFUNDABLE_FROM` includes `PACKED`, which a cash order
+    can reach with `paidAt` still null, so a status-only gate would have
+    reversed points that were never awarded.
+- New `GET /api/account/orders` (hard `ACCOUNT_UNAUTHORIZED` if not signed
+  in, unlike checkout's optional read) lists the signed-in account's own
+  orders. `components/account/LockerSignIn.tsx` renders them in a new
+  section using `AngledPanel` (the existing profile/rewards cards were left
+  on their pre-existing raw `clip-*` classes — not converted, to keep this
+  change's diff scoped to what's new).
+
+**Not built, deliberately:** redemption. The existing "Redeem 10 points →
+$0.10 off" copy stays informational; no endpoint accepts a points amount, and
+none of this change touches checkout pricing.
+
+**Not tested by an automated suite in this pass** — verified manually against
+the local dev database and `tsc`/`eslint` only:
+- Concurrent cash-collect double-press awarding points exactly once.
+- Two webhook deliveries for one PaymentIntent awarding points exactly once.
+- A refund reversing points exactly once, via both the webhook and the admin
+  refund path, without double-reversing if both fire for the same order.
+- A `PACKED`-but-never-cash-collected order refunded via the admin route
+  reversing zero points.
+- `adjust_reward_points` clamping at zero via a direct `psql` call.
+
+Whoever picks this up next should add these as real `vitest`/concurrency
+tests before treating this as P5-hardened — the pattern to follow is the
+existing checkout/webhook concurrency suite, not a new one invented from
+scratch.
+
+### 89. [qa] Automated tests for #88 (orders↔accounts, reward points), plus a real bug found and fixed along the way
+
+Added `tests/unit/rewards.test.ts` (the `pointsForSubtotal` formula, pure),
+`tests/concurrency/rewards.test.ts` (award/reversal idempotency: concurrent
+webhook replay, a triple-pressed cash-collect button, a manual refund racing
+`charge.refunded`, the PACKED-but-never-paid case reversing nothing, `adjust_reward_points`
+clamping at zero via a direct call), and `tests/api/account.test.ts`
+(signup/login/logout, `GET /api/account/orders` — auth-required, PII-free,
+no retroactive linking, reflects status changes). 154 tests in `tests/concurrency`
++ `tests/api` now pass (151 pass; the pre-existing 3 `PAST_CUTOFF` failures in
+`tests/api/money.test.ts` are #83's already-documented drift, not this change).
+
+**Infra needed and added:**
+- `tests/setup/db.ts`'s `resetDb()` now also truncates `users` (cascades to
+  `account_sessions`; `oauth_states` has no FK to `users` and is left alone
+  since nothing in this suite exercises the Google token exchange).
+- `tests/helpers.ts` gained `signupAccount()`, `getAccountMe()`,
+  `getAccountOrders()`, and `seedPendingCardOrder({ accountCookie })`.
+- The local machine had no `looplockers`/`looplockers_test` role+database yet
+  (`tests/setup/env.ts`'s default) — created once, matching that file's
+  documented default credentials.
+- Running this suite in the isolated `QA_PROJECT_DIR` mirror (needed here
+  since a `next dev` was already running on port 3000 for the same project
+  directory) requires manually placing a `.env.local` in the mirror —
+  `project-dir.ts` deliberately doesn't copy the real one — and exporting
+  `ADMIN_PASSCODE`/`INVENTORY_PASSCODE` into the shell running vitest itself,
+  since `tests/helpers.ts`'s constants read those from the test runner's own
+  `process.env`, not the spawned server's.
+
+**A real, deterministic bug found while writing the duplicate-signup test,
+fixed in `app/api/account/signup/route.ts`:** every username/email conflict
+returned `EMAIL_TAKEN`, even for a username-only collision. Cause: Prisma 7's
+pg driver adapter (`lib/db.ts`'s own "DELTA FROM CLAUDE.md §4" note) nests the
+real constraint name under `meta.driverAdapterError.cause`, not the flat
+`meta.target` the original code checked — which is `undefined` under this
+adapter, so `target.includes("username")` was always false. Fixed to check
+the constraint index name and the raw Postgres message too. Verified directly
+against a real signup conflict in both directions before and after.
+
+**Also created `lib/rewards-formula.ts`**, splitting `pointsForSubtotal` out
+of `lib/rewards.ts` — the latter imports `lib/settings.ts` → `lib/db.ts`,
+which throws without `DATABASE_URL`, so the pure formula couldn't be unit
+tested (`QA_NO_SERVER=1`, no database at all) while living in the same file.
+Same reasoning `lib/money.ts` already has zero imports for.
+
+**Not covered by this pass:** the Google OAuth token-exchange flow (needs
+real Google credentials this harness doesn't have) and E2E/browser tests for
+the new order-history UI section in `LockerSignIn.tsx`.
+
+### 90. [backend] `User.name` — Google's real display name, kept separate from the compressed `username`
+
+Google sign-in was live (#87–#89) but discarded `profile.name` entirely,
+using it only to derive `username` (lower-case, no spaces, unique) — so a
+signed-in page rendered "tahmeedhossain" where it should have shown "Tahmeed
+Hossain." Added `User.name String?` (migration `20260918054647_add_user_display_name`),
+populated from Google's profile on create, and backfilled on an existing
+account's next Google login if it was never set (never overwritten once
+present — a login isn't allowed to second-guess a name already recorded).
+Null for password signups; that form never collects one.
+
+Every display surface now reads `name ?? username`:
+`components/account/LockerSignIn.tsx`'s welcome header and profile card, and
+`accountUserSelect`/`AccountUser` (`lib/account-auth.ts`) plus the manual
+shape built in `app/api/account/login/route.ts`.
+
+Also added: `components/checkout/CheckoutForm.tsx` now best-effort prefills
+`studentName`/`email` from `/api/account/me` on mount if signed in — never
+overwrites something already typed (checked via a functional `setState` read
+at resolve time, not render time), and a failed/401 fetch (guest checkout)
+silently no-ops.
+
+**Not done in this pass:** no automated test added for either the name
+backfill or the checkout prefill — verified by hand against the local
+database and the running dev server only. Worth a `tests/api/account.test.ts`
+addition and a `tests/e2e/checkout.spec.ts` addition respectively before
+calling this hardened.

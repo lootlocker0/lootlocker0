@@ -5,6 +5,7 @@ import { db } from "@/lib/db";
 import { releaseOrder } from "@/lib/db/release";
 import { sendConfirmationEmail } from "@/lib/email";
 import { logEvent } from "@/lib/log";
+import { awardRewardPoints, getPointsPerDollar, pointsForSubtotal, reverseRewardPoints } from "@/lib/rewards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -254,7 +255,13 @@ export async function POST(req: NextRequest) {
 async function onPaid(pi: Stripe.PaymentIntent) {
   const order = await db.order.findUnique({
     where: { stripePaymentIntentId: pi.id },
-    select: { id: true, status: true, totalCents: true },
+    select: {
+      id: true,
+      status: true,
+      totalCents: true,
+      subtotalCents: true,
+      userId: true,
+    },
   });
 
   if (!order) {
@@ -292,12 +299,31 @@ async function onPaid(pi: Stripe.PaymentIntent) {
     return;
   }
 
+  // Points are computed before the transaction (a plain settings read, not
+  // something that needs to run inside it — same convention as checkout's
+  // pre-transaction getSetting calls), but AWARDED only inside it, gated on
+  // this exact call being the one that flips PENDING -> PAID. Zero when
+  // there's no linked account, so a guest order's transaction below does
+  // nothing extra.
+  const pointsToAward = order.userId
+    ? pointsForSubtotal(order.subtotalCents, await getPointsPerDollar())
+    : 0;
+
   // Conditional on PENDING for the same reason releaseOrder is: two concurrent
   // deliveries that both got past the dedupe insert (different event ids for
-  // the same intent, which Stripe does send) must not both act.
-  const { count } = await db.order.updateMany({
-    where: { id: order.id, status: "PENDING" },
-    data: { status: "PAID", paidAt: new Date(), expiresAt: null },
+  // the same intent, which Stripe does send) must not both act. Wrapped in a
+  // transaction together with the reward-points award (previously a bare
+  // updateMany) so a crash between "flip to PAID" and "award points" rolls
+  // back both rather than leaving one without the other.
+  const count = await db.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { id: order.id, status: "PENDING" },
+      data: { status: "PAID", paidAt: new Date(), expiresAt: null },
+    });
+    if (count === 1 && order.userId) {
+      await awardRewardPoints(tx, order.userId, pointsToAward);
+    }
+    return count;
   });
   if (count === 0) {
     logEvent("webhook_noop_raced", { orderId: order.id });
@@ -305,6 +331,13 @@ async function onPaid(pi: Stripe.PaymentIntent) {
   }
 
   logEvent("order_paid", { orderId: order.id, totalCents: order.totalCents });
+  if (order.userId && pointsToAward > 0) {
+    logEvent("reward_points_awarded", {
+      orderId: order.id,
+      userId: order.userId,
+      points: pointsToAward,
+    });
+  }
   // Not awaited: the response to Stripe must not wait on a notification.
   void sendConfirmationEmail(order.id);
 }
@@ -332,7 +365,13 @@ async function onRefunded(charge: Stripe.Charge) {
 
   const before = await db.order.findUnique({
     where: { stripePaymentIntentId: piId },
-    select: { id: true, status: true },
+    select: {
+      id: true,
+      status: true,
+      userId: true,
+      paidAt: true,
+      subtotalCents: true,
+    },
   });
   if (!before) {
     // Money went back for an intent we cannot name. Same recovery path as
@@ -359,21 +398,40 @@ async function onRefunded(charge: Stripe.Charge) {
   // idempotent (a second refund event for an already-REFUNDED order matches
   // nothing, exactly as before), and it is future-proof — a status added to the
   // enum later cannot silently become a hole a refund falls through.
-  const { count } = await db.order.updateMany({
-    where: { stripePaymentIntentId: piId, status: { notIn: ["REFUNDED"] } },
-    // `expiresAt` is cleared because the order is leaving PENDING: schema.prisma
-    // says an expiry only belongs to a PENDING card order, and leaving one on a
-    // REFUNDED row is a stale claim the sweep would ignore but a human would
-    // misread.
-    //
-    // `paidAt` is deliberately NOT written. It is set by exactly one path —
-    // onPaid, after the amount check — and stamping it here with the instant a
-    // refund was PROCESSED would put a time in it that is not when the money
-    // moved. A REFUNDED order with a null `paidAt` is legible and true ("the
-    // refund reached us before the payment confirmation did", which the log
-    // line below names); a fabricated timestamp in a money field is not.
-    // Nothing downstream requires it: nothing outside the webhook reads paidAt.
-    data: { status: "REFUNDED", expiresAt: null },
+  // Reversal is gated on `before.paidAt`, read here BEFORE this write touches
+  // the row — never on `before.status`. `REFUNDABLE_FROM` in the admin refund
+  // route includes PACKED, and a cash order can sit PACKED with `paidAt` still
+  // null (bagged before the money is collected); points were never awarded for
+  // that order, so there is nothing to reverse. A PENDING order (the
+  // out-of-order-delivery case below) has `paidAt: null` for the same reason
+  // and needs no special-casing to also reverse zero.
+  const pointsToReverse = before.paidAt && before.userId
+    ? pointsForSubtotal(before.subtotalCents, await getPointsPerDollar())
+    : 0;
+
+  // Wrapped in a transaction together with the reward-points reversal
+  // (previously a bare updateMany), for the same reason onPaid's award is.
+  const count = await db.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { stripePaymentIntentId: piId, status: { notIn: ["REFUNDED"] } },
+      // `expiresAt` is cleared because the order is leaving PENDING: schema.prisma
+      // says an expiry only belongs to a PENDING card order, and leaving one on a
+      // REFUNDED row is a stale claim the sweep would ignore but a human would
+      // misread.
+      //
+      // `paidAt` is deliberately NOT written. It is set by exactly one path —
+      // onPaid, after the amount check — and stamping it here with the instant a
+      // refund was PROCESSED would put a time in it that is not when the money
+      // moved. A REFUNDED order with a null `paidAt` is legible and true ("the
+      // refund reached us before the payment confirmation did", which the log
+      // line below names); a fabricated timestamp in a money field is not.
+      // Nothing downstream requires it: nothing outside the webhook reads paidAt.
+      data: { status: "REFUNDED", expiresAt: null },
+    });
+    if (count === 1 && before.paidAt && before.userId) {
+      await reverseRewardPoints(tx, before.userId, pointsToReverse);
+    }
+    return count;
   });
 
   if (count === 0) {
@@ -396,4 +454,11 @@ async function onRefunded(charge: Stripe.Charge) {
     updated: count,
     previousStatus: before.status,
   });
+  if (before.paidAt && before.userId && pointsToReverse > 0) {
+    logEvent("reward_points_reversed", {
+      orderId: before.id,
+      userId: before.userId,
+      points: pointsToReverse,
+    });
+  }
 }

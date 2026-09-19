@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
@@ -123,6 +123,29 @@ export function CheckoutForm() {
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<CheckoutError | null>(null);
+
+  // Best-effort prefill from a signed-in account (the Locker) — never blocks
+  // or errors the form if it's missing/fails, and never overwrites something
+  // the student already typed (the functional setState reads the CURRENT
+  // value at the moment this resolves, not the value from render time, so a
+  // fast typist racing a slow fetch still wins). Guest checkout is
+  // unaffected either way: no cookie means this fetch just 401s and no-ops.
+  useEffect(() => {
+    fetch("/api/account/me", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const payload = (await res.json()) as {
+          user?: { name: string | null; email: string };
+        };
+        const account = payload.user;
+        if (!account) return;
+        if (account.name) setStudentName((cur) => cur || account.name!);
+        setEmail((cur) => cur || account.email);
+      })
+      .catch(() => {
+        /* guest checkout must work with no account at all */
+      });
+  }, []);
   const [card, setCard] = useState<CardResult | null>(null);
 
   // Checked BEFORE the empty-cart guard below, deliberately: the order this

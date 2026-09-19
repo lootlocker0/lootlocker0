@@ -362,6 +362,9 @@ export async function seedPendingCardOrder(
     capacity?: number;
     expiresAt?: Date | null;
     email?: string;
+    /** Attributes the order to a signed-in account, exactly like a browser
+     *  carrying `ll_account` at checkout. Omit for a guest order. */
+    accountCookie?: string;
   } = {},
 ): Promise<SeededOrder> {
   const totalCents = opts.totalCents ?? 500;
@@ -383,6 +386,7 @@ export async function seedPendingCardOrder(
       paymentMethod: "CARD",
       items: [{ productId: product.id, qty }],
     }),
+    { cookie: opts.accountCookie },
   );
   if (r.status !== 200) {
     throw new Error(`seedPendingCardOrder: checkout failed ${r.status} ${r.text}`);
@@ -514,6 +518,59 @@ export async function inventoryRequest(
       ...(body !== undefined ? { "content-type": "application/json" } : {}),
     },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+  });
+  return readResponse(res);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The Locker account (§6c) — no secret to configure. Unlike admin/inventory,
+// the session cookie carries a random token whose hash is looked up in
+// `account_sessions`, so there is nothing for tests/setup/env.ts to pin.
+// ─────────────────────────────────────────────────────────────────────────────
+
+export interface SignedUpAccount {
+  user: { id: string; username: string; email: string; rewardPoints: number };
+  cookie: string;
+}
+
+/**
+ * Creates a real account through the real signup route (not an insert — the
+ * password hash, the session row, and the `ll_account` cookie all have to be
+ * genuine for a test that then drives checkout/webhooks/refunds as that
+ * account).
+ */
+export async function signupAccount(
+  opts: { username?: string; email?: string; password?: string } = {},
+): Promise<SignedUpAccount> {
+  const id = uniq();
+  const res = await fetch(`${BASE_URL}/api/account/signup`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({
+      username: opts.username ?? `qa_${id}`,
+      email: opts.email ?? `qa-account-${id}@school.ca`,
+      password: opts.password ?? "qa-password-1234",
+    }),
+  });
+  const r = await readResponse(res);
+  if (r.status !== 200) {
+    throw new Error(`signupAccount: signup failed ${r.status} ${r.text}`);
+  }
+  return { user: r.body.user, cookie: cookieHeaderFrom(r.cookies) };
+}
+
+export async function getAccountMe(cookie?: string): Promise<ApiResponse> {
+  const res = await fetch(`${BASE_URL}/api/account/me`, {
+    headers: cookie ? { cookie } : {},
+    cache: "no-store",
+  });
+  return readResponse(res);
+}
+
+export async function getAccountOrders(cookie?: string): Promise<ApiResponse> {
+  const res = await fetch(`${BASE_URL}/api/account/orders`, {
+    headers: cookie ? { cookie } : {},
+    cache: "no-store",
   });
   return readResponse(res);
 }

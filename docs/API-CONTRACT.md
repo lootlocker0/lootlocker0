@@ -70,6 +70,7 @@ Branch on `code`, never on `message` — messages are copy and will change.
 |---|---|---|---|
 | `INVALID_INPUT` | 400 | Check the highlighted fields. | `fields`: `{ [fieldName]: string[] }` |
 | `ADMIN_UNAUTHORIZED` | 401 | Staff sign-in required. | — |
+| `ACCOUNT_UNAUTHORIZED` | 401 | Email or password is incorrect. | — |
 | `PAYMENT_FAILED` | 402 | Payment was declined. | — |
 | `ORDER_NOT_FOUND` | 404 | We couldn't find that order. | — |
 | `PAST_CUTOFF` | 409 | Ordering closed for that pickup time. | — |
@@ -82,10 +83,14 @@ Branch on `code`, never on `message` — messages are copy and will change.
 | `CASH_NOT_COLLECTED` | 409 | Cash has not been recorded for this order yet. | `totalCents` |
 | `PAYMENT_METHOD_MISMATCH` | 409 | That action does not apply to this payment method. | `paymentMethod` |
 | `STOCK_ADJUSTMENT_REJECTED` | 409 | That stock adjustment would leave a negative quantity. | `productId`, `stockQty`, `delta` |
+| `USERNAME_TAKEN` | 409 | That username is already in use. | — |
+| `EMAIL_TAKEN` | 409 | That email is already in use. | — |
+| `OAUTH_FAILED` | 400 | Google sign-in could not be completed. | — |
 | `RATE_LIMITED` | 429 | Too many attempts. Wait a minute. | — |
 | `INTERNAL` | 500 | Something broke on our end. | — |
 | `REFUND_FAILED` | 502 | The refund could not be completed at the payment provider. | `reason`: `NO_PAYMENT_INTENT` \| `PROVIDER_ERROR` |
 | `ADMIN_NOT_CONFIGURED` | 503 | Staff sign-in is not configured on this server. | — |
+| `ACCOUNT_NOT_CONFIGURED` | 503 | Account sign-in is not configured on this server. | — |
 
 The last seven are P4 (staff admin) only. Unlike `ORDER_NOT_FOUND`, they are
 allowed to be specific: the caller already holds a staff session that can list
@@ -97,65 +102,6 @@ Source of truth: `lib/errors.ts`. Codes are added there first.
 
 `SLOT_FULL` and `OUT_OF_STOCK` are recoverable: refetch slots and the catalog
 and let the student retry. The rest are terminal for that attempt.
-
-## 6c. The Locker account
-
-Student accounts use the `ll_account` httpOnly, `SameSite=Lax` cookie. The
-cookie contains an opaque random token; only its SHA-256 hash is stored in
-`account_sessions`, and the server checks that row and its expiry on every
-request. Sessions last 30 days. Logout deletes the matching server row and
-expires the cookie, so a copied or previously issued cookie stops working.
-
-### `POST /api/account/signup`
-
-Body:
-
-```json
-{ "username": "locker_kid", "email": "student@example.com", "password": "at-least-8-chars" }
-```
-
-Creates a password account, starts a session, and returns:
-
-```json
-{ "user": { "id": "cuid", "username": "locker_kid", "email": "student@example.com", "rewardPoints": 0 } }
-```
-
-`USERNAME_TAKEN` (409) and `EMAIL_TAKEN` (409) identify uniqueness conflicts.
-Passwords are stored as salted Node `scrypt` hashes.
-
-### `POST /api/account/login`
-
-Body: `{ "email": "student@example.com", "password": "..." }`.
-On success, starts a session and returns the same `{ user }` shape as signup.
-Wrong credentials return `ACCOUNT_UNAUTHORIZED` (401) without revealing
-whether the email exists. Login and signup are rate limited before credential
-processing.
-
-### `GET /api/account/me`
-
-Returns the current session's `{ user }` shape. Missing, expired, or revoked
-sessions return `ACCOUNT_UNAUTHORIZED` (401).
-
-### `POST /api/account/logout`
-
-Revokes the current server session when present, expires `ll_account`, and
-returns `{ "ok": true }`. It is idempotent for a missing or already-revoked
-cookie.
-
-### `GET /api/account/google/start`
-
-When all `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
-`GOOGLE_REDIRECT_URI` variables are configured, creates a ten-minute,
-single-use server-side OAuth state and redirects to Google. Missing
-configuration returns `ACCOUNT_NOT_CONFIGURED` (503).
-
-### `GET /api/account/google/callback`
-
-Validates and consumes the one-time state, exchanges the authorization code,
-requires a verified Google email, then links or creates the account and sets
-`ll_account`. Success redirects to `NEXT_PUBLIC_SITE_URL` (or the callback
-origin) at `/`. Invalid, expired, replayed, or failed callbacks return
-`OAUTH_FAILED` (400). No OAuth token or account PII is logged.
 
 `ORDER_NOT_FOUND` is deliberately ambiguous. It means "no order you are allowed
 to read" — an unknown order number, a missing or expired confirmation cookie, and
@@ -1985,6 +1931,162 @@ product and is not done here.
 editing `prisma/seed.ts`. A product created through `/inventory` or
 `scripts/add-product.mjs` gets no pack/unit-size string until this gap is
 closed by adding the field to both schemas and their routes.
+
+---
+
+## 6c. The Locker account
+
+> Relocated from its original position between §2 and §3, where an earlier
+> commit inserted it directly into the middle of the error-code table's
+> surrounding prose. Content unchanged except for the additions below;
+> `docs/HANDOFF.md` #87 has the same note.
+
+**`user.name`** is the person's real display name — distinct from `username`
+(a lower-case, no-space, unique login handle) — populated from Google's
+profile for an OAuth sign-in and `null` for a password signup (that form
+never collects one). Every display surface must render `name ?? username`,
+never `username` alone, or a Google account's name shows as its compressed
+handle ("tahmeedhossain" instead of "Tahmeed Hossain").
+
+Student accounts use the `ll_account` httpOnly, `SameSite=Lax` cookie. The
+cookie contains an opaque random token; only its SHA-256 hash is stored in
+`account_sessions`, and the server checks that row and its expiry on every
+request. Sessions last 30 days. Logout deletes the matching server row and
+expires the cookie, so a copied or previously issued cookie stops working.
+
+### `POST /api/account/signup`
+
+Body:
+
+```json
+{ "username": "locker_kid", "email": "student@example.com", "password": "at-least-8-chars" }
+```
+
+Creates a password account, starts a session, and returns:
+
+```json
+{ "user": { "id": "cuid", "username": "locker_kid", "name": null, "email": "student@example.com", "rewardPoints": 0 } }
+```
+
+`USERNAME_TAKEN` (409) and `EMAIL_TAKEN` (409) identify uniqueness conflicts.
+Passwords are stored as salted Node `scrypt` hashes.
+
+### `POST /api/account/login`
+
+Body: `{ "email": "student@example.com", "password": "..." }`.
+On success, starts a session and returns the same `{ user }` shape as signup.
+Wrong credentials return `ACCOUNT_UNAUTHORIZED` (401) without revealing
+whether the email exists. Login and signup are rate limited before credential
+processing.
+
+### `GET /api/account/me`
+
+Returns the current session's `{ user }` shape. Missing, expired, or revoked
+sessions return `ACCOUNT_UNAUTHORIZED` (401).
+
+### `GET /api/account/orders`
+
+Returns the signed-in account's own order history, most recent first:
+
+```jsonc
+{
+  "orders": [
+    {
+      "orderNumber": "LL-04213",
+      "status": "PICKED_UP",
+      "paymentMethod": "CARD",
+      "pickupCode": "FMRC",
+      "subtotalCents": 450,
+      "taxCents": 0,
+      "totalCents": 450,
+      "paidAt": "2026-09-16T16:32:01.000Z",
+      "createdAt": "2026-09-16T16:20:44.000Z",
+      "slot": { "label": "Pickup 1", "startTime": "07:50", "location": "Locker B449", "serviceDate": "2026-09-16T00:00:00.000Z" },
+      "items": [{ "productId": "…", "qty": 1, "nameSnapshot": "Gatorade Fruit Punch", "unitPriceCents": 300, "raritySnapshot": "COMMON", "allergensSnapshot": [] }]
+    }
+  ]
+}
+```
+
+Requires a valid `ll_account` session — `ACCOUNT_UNAUTHORIZED` (401) otherwise,
+same as `/me`. Never returns `studentName`, `email`, `phone`, or `homeroom`;
+the account system is single-user with no household/multi-child concept, so
+there is no case for redisplaying a student's name to themself here. No
+pagination yet, matching `GET /api/orders/[orderNumber]`'s existing lack of
+one — a real limitation once an account has placed hundreds of orders, not
+addressed in this pass.
+
+**Only orders placed while signed in appear here.** There is no retroactive
+linking of orders placed as a guest before an account existed, even when the
+email matches — signup has no email-verification step, so linking by email
+match would let anyone see a stranger's order history just by signing up
+with a known email.
+
+### `POST /api/account/logout`
+
+Revokes the current server session when present, expires `ll_account`, and
+returns `{ "ok": true }`. It is idempotent for a missing or already-revoked
+cookie.
+
+### `GET /api/account/google/start`
+
+When all `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and
+`GOOGLE_REDIRECT_URI` variables are configured, creates a ten-minute,
+single-use server-side OAuth state and redirects to Google. Missing
+configuration returns `ACCOUNT_NOT_CONFIGURED` (503).
+
+### `GET /api/account/google/callback`
+
+Validates and consumes the one-time state, exchanges the authorization code,
+requires a verified Google email, then links or creates the account and sets
+`ll_account`. Success redirects to `NEXT_PUBLIC_SITE_URL` (or the callback
+origin) at `/`. Invalid, expired, replayed, or failed callbacks return
+`OAUTH_FAILED` (400). No OAuth token or account PII is logged.
+
+### Reward points
+
+Points are earned automatically — there is no endpoint to call. The trigger
+is `Order.paidAt` transitioning from null to set, for **either** payment
+method:
+
+- **Card**: the Stripe webhook's `onPaid` handler, the instant it flips an
+  order `PENDING` → `PAID`.
+- **Cash**: `POST /api/admin/orders/[orderNumber]/cash`, the instant it
+  records `paidAt` (which can happen at `RESERVED`→`PAID` or while the order
+  stays `PACKED`/`PICKED_UP` — see that route's own comments on why `paidAt`,
+  not `status`, is the money fact).
+
+Formula: `floor(subtotalCents / 100) * reward_points_per_dollar` — pre-tax,
+via the `reward_points_per_dollar` setting (`lib/settings.ts`, default 10,
+matching the rate already shown on the signed-in Locker page). Only awarded
+when the order carries a `userId` (i.e. was placed while signed in); a guest
+order never earns points, even after the fact.
+
+Reversal mirrors it exactly, on refund (`charge.refunded` via the webhook, or
+`POST /api/admin/orders/[orderNumber]/refund`), gated on the order's `paidAt`
+having been set **before** the refund — never on `status` alone, since a
+cash order can reach `PACKED` with `paidAt` still null (bagged before the
+money was collected), and no points were ever awarded for that order.
+
+Both directions run inside the same database transaction as the `paidAt`/
+`status` write they're conditioned on, via a dedicated `adjust_reward_points`
+Postgres function (`prisma/migrations/manual_constraints.sql`) — the same
+"atomic, bounds-checked SQL function" pattern `reserve_stock`/`adjust_stock`
+already use, never a raw Prisma increment/decrement. The balance can never go
+negative.
+
+**Known limitation:** reversal recomputes points from `subtotalCents` at
+whatever `reward_points_per_dollar` is set to *at refund time*, not the rate
+in effect when the order was originally paid. If the setting changes in
+between, the reversed amount won't exactly match the awarded amount. This app
+already accepts equivalent drift elsewhere (changing `daily_spend_cap_cents`
+isn't retroactive either); documented rather than solved.
+
+**Redemption is not implemented.** The "Redeem 10 points → $0.10 off" copy on
+the signed-in Locker page is informational only — there is no
+spend-points-at-checkout logic anywhere, and no endpoint accepts a points
+amount. Building it needs its own policy pass first (how it interacts with
+the daily spend cap, what happens to spent points on a later refund).
 
 ---
 
