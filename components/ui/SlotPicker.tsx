@@ -27,6 +27,10 @@ export function SlotPicker({
   );
   const [selectedDate, setSelectedDate] = useState<string | null>(groups[0]?.dateKey ?? null);
   const [selectedManualTime, setSelectedManualTime] = useState<string | null>(null);
+  const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">("pickup");
+  const [pickupLocation, setPickupLocation] = useState("Locker A157");
+
+  const pickupLocations = ["Locker A157", "The Hub", "E-wing stairs"];
 
   const effectiveSelectedDate =
     selectedDate && groups.some((group) => group.dateKey === selectedDate)
@@ -57,8 +61,67 @@ export function SlotPicker({
   return (
     <fieldset>
       <legend className="font-display text-headline-md uppercase text-text">
-        Pickup window
+        Collection point
       </legend>
+
+      <div className="mt-4 grid grid-cols-2 gap-2" role="radiogroup" aria-label="Collection method">
+        {(["delivery", "pickup"] as const).map((method) => (
+          <label
+            key={method}
+            className={`clip-panel cursor-pointer border-2 p-3 transition-colors focus-within:outline focus-within:outline-[3px] focus-within:outline-gold ${
+              fulfillment === method
+                ? "border-gold bg-gold/10"
+                : "border-white/10 bg-surface-2 hover:border-brand/50"
+            }`}
+          >
+            <input
+              type="radio"
+              name="fulfillment"
+              value={method}
+              checked={fulfillment === method}
+              onChange={() => setFulfillment(method)}
+              className="sr-only"
+            />
+            <span className="font-display uppercase text-text">
+              {method === "delivery" ? "Delivery" : "Pickup"}
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {fulfillment === "pickup" && (
+        <fieldset className="mt-4 border-t border-white/10 pt-4">
+          <legend className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">
+            Pickup location
+          </legend>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-3">
+            {pickupLocations.map((location) => (
+              <label
+                key={location}
+                className={`clip-shard-tight cursor-pointer border-2 px-3 py-2 text-center font-mono text-xs transition-colors focus-within:outline focus-within:outline-[3px] focus-within:outline-gold ${
+                  pickupLocation === location
+                    ? "border-gold bg-gold text-void"
+                    : "border-white/10 text-text-faint hover:border-brand hover:text-text"
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="pickupLocation"
+                  value={location}
+                  checked={pickupLocation === location}
+                  onChange={() => setPickupLocation(location)}
+                  className="sr-only"
+                />
+                {location}
+              </label>
+            ))}
+          </div>
+        </fieldset>
+      )}
+
+      <p className="mt-4 font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">
+        {fulfillment === "delivery" ? "Delivery details coming soon" : "Choose your pickup window"}
+      </p>
 
       {groups.length === 0 ? (
         <div className="mt-3 border-2 border-warning/60 bg-surface-2 p-4">
