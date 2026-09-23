@@ -1,0 +1,32 @@
+name: Expiry Sweep
+
+# Stands in for Vercel's own Cron Jobs, which the Hobby plan caps at once/day
+# (this app has no Pro subscription). GitHub's schedule isn't guaranteed to
+# the minute under load, but that's fine here: worst case an abandoned card
+# order holds its stock/slot a few minutes past its TTL, same as any other
+# cron would already tolerate (see the comment on GET /api/cron/sweep).
+#
+# GitHub disables a schedule trigger automatically after 60 days with no
+# repository activity — if the sweep silently stops firing, check the
+# Actions tab for that first.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the sweep endpoint
+        run: |
+          status=$(curl -sS -o /tmp/sweep-body.json -w '%{http_code}' \
+            --max-time 20 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ vars.PROD_SITE_URL }}/api/cron/sweep")
+          echo "HTTP $status"
+          cat /tmp/sweep-body.json
+          if [ "$status" != "200" ]; then
+            echo "::error::sweep call failed with status $status"
+            exit 1
+          fi

@@ -12,8 +12,10 @@ export const dynamic = "force-dynamic";
 // student who opens the payment form and closes the tab permanently removes a
 // snack from the shelf and a seat from a pickup window.
 //
-// Registered in vercel.json at */5. The TTL is `pending_order_ttl_minutes`
-// (default 15), so worst-case an abandoned cart holds stock for TTL + 5 minutes.
+// Called every 5 minutes by .github/workflows/sweep-cron.yml, not Vercel's own
+// Cron Jobs — the Hobby plan caps native cron at once/day, and this app has no
+// Pro subscription. The TTL is `pending_order_ttl_minutes` (default 15), so
+// worst-case an abandoned cart holds stock for TTL + 5 minutes.
 
 function authorised(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
