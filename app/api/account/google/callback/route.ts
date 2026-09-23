@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { AppError, errorResponse } from "@/lib/errors";
+import { logEvent } from "@/lib/log";
 import {
   assertGoogleOAuthConfigured,
   clearedOAuthStateCookie,
@@ -101,7 +102,22 @@ export async function GET(req: NextRequest) {
     // actually stops OAuth login CSRF (see oauthStateCookie's comment): the
     // DB-side consumeOAuthState alone proves the value is genuine and
     // single-use, not that THIS browser is the one /start issued it to.
-    if (!code || !state || !oauthStateMatchesCookie(req, state) || !(await consumeOAuthState(state))) {
+    //
+    // Logged separately (not just a single collapsed OAUTH_FAILED) because the
+    // four ways this can fail point at completely different problems — a
+    // cookie mismatch means the browser/cookie plumbing is wrong, an expired
+    // state means the user sat on Google's consent screen too long, and this
+    // is the only place that distinction is visible at all.
+    if (!code || !state) {
+      logEvent("oauth_callback_denied", { reason: "missing_code_or_state" });
+      throw new AppError("OAUTH_FAILED");
+    }
+    if (!oauthStateMatchesCookie(req, state)) {
+      logEvent("oauth_callback_denied", { reason: "state_cookie_mismatch" });
+      throw new AppError("OAUTH_FAILED");
+    }
+    if (!(await consumeOAuthState(state))) {
+      logEvent("oauth_callback_denied", { reason: "state_row_missing_or_expired" });
       throw new AppError("OAUTH_FAILED");
     }
 
