@@ -59,7 +59,9 @@ const PRODUCT_IMAGES: Record<string, string> = {
   "nutella-sticks": "/ProductImages/nutella-bready.png",
   "minute-maid-juice": "/ProductImages/minutemaid.png",
   "fruit-roll-ups": "/ProductImages/fruitrollup.jpg",
-  "chocolate-chip-cookies": "",
+  "chocolate-chip-cookies": "/ProductImages/singlecookie.png",
+  "kitkat-mega-bar": "/ProductImages/kitkatMega.jpg",
+  "takis-intense-nacho": "/ProductImages/takiIntenseNacho.jpg",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,7 +216,7 @@ const PRODUCTS: SeedProduct[] = [
   },
   {
     slug: "chocolate-chip-cookies",
-    name: "Chocolate Chip Cookies",
+    name: "Chocolate Chip Cookie",
     description: "Soft baked chocolate chip cookies.",
     sizeProduct: "454 g",
     priceCents: 150,
@@ -222,6 +224,28 @@ const PRODUCTS: SeedProduct[] = [
     rarity: "RARE",
     allergens: ["GLUTEN", "DAIRY", "EGGS", "SOY"],
     stockQty: 16,
+  },
+  {
+    slug: "kitkat-mega-bar",
+    name: "KitKat Mega Bar",
+    description: "Crispy wafer fingers covered in smooth milk chocolate.",
+    sizeProduct: "42 g",
+    priceCents: 350,
+    category: "sweet",
+    rarity: "UNCOMMON",
+    allergens: ["GLUTEN", "DAIRY", "SOY"],
+    stockQty: 16,
+  },
+  {
+    slug: "takis-intense-nacho",
+    name: "Takis Intense Nacho",
+    description: "Rolled corn tortilla chips with intense nacho cheese flavour.",
+    sizeProduct: "280 g (9.9 oz) large bag",
+    priceCents: 500,
+    category: "savory",
+    rarity: "RARE",
+    allergens: ["DAIRY", "SOY"],
+    stockQty: 12,
   },
 ];
 

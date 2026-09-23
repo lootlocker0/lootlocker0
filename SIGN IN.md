@@ -1,4 +1,4 @@
-# LootLockers Sign-In
+e LootLockers Sign-In
 
 This document records the account work implemented for **The Locker**, the setup required to run it, and the remaining work before production launch.
 
