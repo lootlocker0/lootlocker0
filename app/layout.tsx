@@ -47,7 +47,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             create-next-app default white (docs/HANDOFF.md #74). */}
         <meta name="theme-color" content="#07070F" />
       </head>
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body suppressHydrationWarning className="min-h-full flex flex-col">
+        {children}
+      </body>
     </html>
   );
 }

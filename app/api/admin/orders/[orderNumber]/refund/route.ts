@@ -6,6 +6,7 @@ import { requireAdminSession } from "@/lib/admin-session";
 import { adminRefundSchema } from "@/lib/validation";
 import { refundOrderPayment } from "@/lib/stripe/payments";
 import { loadAdminOrder } from "@/lib/db/admin";
+import { getPointsPerDollar, pointsForSubtotal, reverseRewardPoints } from "@/lib/rewards";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -161,6 +162,16 @@ export async function POST(
       }
     }
 
+    // Computed before the transaction (a plain settings read), reversed
+    // inside it, only if this call is the one that actually moves the order
+    // to REFUNDED. Gated on `order.paidAt`, never `order.status` —
+    // `REFUNDABLE_FROM` above includes PACKED, and a cash order can sit
+    // PACKED with `paidAt` still null (bagged before the money was
+    // collected), in which case no points were ever awarded to reverse.
+    const pointsToReverse = order.paidAt && order.userId
+      ? pointsForSubtotal(order.subtotalCents, await getPointsPerDollar())
+      : 0;
+
     // ── 3. The books ─────────────────────────────────────────────────────────
     //
     // Lock order inside this transaction is order row -> slot row, matching
@@ -195,6 +206,9 @@ export async function POST(
             `;
             seatReleased = true;
           }
+          if (order.paidAt && order.userId) {
+            await reverseRewardPoints(tx, order.userId, pointsToReverse);
+          }
           return { changed: true, seatReleased };
         }
 
@@ -204,11 +218,18 @@ export async function POST(
           where: { id: order.id, status: "PICKED_UP" },
           data: { status: "REFUNDED", expiresAt: null },
         });
-        if (afterHandover.count === 1) return { changed: true, seatReleased };
+        if (afterHandover.count === 1) {
+          if (order.paidAt && order.userId) {
+            await reverseRewardPoints(tx, order.userId, pointsToReverse);
+          }
+          return { changed: true, seatReleased };
+        }
 
         // Somebody moved it between the eligibility read and here — most
         // likely Stripe's `charge.refunded` webhook for the refund we just
         // created, which is a benign race and lands on the same end state.
+        // Points were already reversed by that webhook delivery; reversing
+        // again here would double-count, so nothing happens on this path.
         return { changed: false, seatReleased };
       },
       { isolationLevel: "ReadCommitted", maxWait: 5_000, timeout: 15_000 },
@@ -225,6 +246,13 @@ export async function POST(
       // The Stripe refund id is not PII and is the thread back to the money.
       ...(stripeRefundId ? { stripeRefundId } : {}),
     });
+    if (result.changed && order.paidAt && order.userId && pointsToReverse > 0) {
+      logEvent("reward_points_reversed", {
+        orderId: order.id,
+        userId: order.userId,
+        points: pointsToReverse,
+      });
+    }
 
     return Response.json(
       {

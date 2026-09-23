@@ -102,6 +102,9 @@ model Product {
   name        String
   description String
 
+  /// Costco pack / unit size, e.g. "591 mL" or "25 g".
+  sizeProduct String? @map("size_product")
+
   /// Integer cents. Never a float, never a string.
   priceCents Int @map("price_cents")
 
@@ -207,6 +210,17 @@ model Order {
   slotId String     @map("slot_id")
   slot   PickupSlot @relation(fields: [slotId], references: [id], onDelete: Restrict)
 
+  /// Set only when the checkout request carried a valid `ll_account` session
+  /// at the moment the order was created — orders placed before an account
+  /// existed, or as a guest, are never retroactively linked (no email
+  /// verification exists at signup, so linking by email match would let
+  /// anyone see a stranger's order history just by signing up with a known
+  /// email). `SetNull`, not `Cascade`/`Restrict`: deleting a `User` must
+  /// never delete a real financial record — the order just becomes
+  /// guest-shaped again.
+  userId String? @map("user_id")
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+
   paymentMethod PaymentMethod @map("payment_method")
   status        OrderStatus   @default(PENDING)
 
@@ -241,6 +255,8 @@ model Order {
   @@index([status, expiresAt])
   // Admin pick list: today's orders grouped by slot.
   @@index([slotId, status])
+  // Account order-history lookup: WHERE user_id = ? ORDER BY created_at DESC
+  @@index([userId, createdAt])
   @@map("orders")
 }
 
@@ -326,4 +342,50 @@ model Setting {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   @@map("settings")
+}
+
+model User {
+  id           String            @id @default(cuid())
+  username     String            @unique
+  /// The person's real display name (e.g. "Tahmeed Hossain"), distinct from
+  /// `username` (a lower-case, no-space, unique login handle). Populated
+  /// from Google's `profile.name` for OAuth sign-ins; null for a password
+  /// signup, since that form never collects one. Every display surface must
+  /// read `name ?? username`, never `username` alone, or a Google account's
+  /// name renders as its compressed handle ("tahmeedhossain" instead of
+  /// "Tahmeed Hossain").
+  name         String?
+  email        String            @unique
+  passwordHash String?           @map("password_hash")
+  googleId     String?           @unique @map("google_id")
+  rewardPoints Int               @default(0) @map("reward_points")
+  createdAt    DateTime          @default(now()) @map("created_at")
+  updatedAt    DateTime          @updatedAt @map("updated_at")
+  sessions     AccountSession[]
+  orders       Order[]
+
+  @@map("users")
+}
+
+model AccountSession {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique @map("token_hash")
+  userId    String   @map("user_id")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("account_sessions")
+}
+
+model OAuthState {
+  id        String   @id @default(cuid())
+  stateHash String   @unique @map("state_hash")
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@index([expiresAt])
+  @@map("oauth_states")
 }

@@ -42,8 +42,27 @@ import "dotenv/config";
 import type { Allergen, Rarity } from "@prisma/client";
 
 import { db } from "../lib/db";
+import { schoolParts } from "../lib/timezone";
 
 const RESET_STOCK = process.env.SEED_RESET_STOCK === "1";
+
+const PRODUCT_IMAGES: Record<string, string> = {
+  "gatorade-fruit-punch": "/ProductImages/redgatorade.png",
+  "gatorade-lemon-lime": "/ProductImages/lemon-limegatorade.png",
+  "gatorade-orange": "/ProductImages/orangegatorade.png",
+  "gatorade-cool-blue": "/ProductImages/bluegatorade.png",
+  "kool-aid-grape": "/ProductImages/grapekoolaid.png",
+  "kool-aid-cherry": "/ProductImages/cherrykoolaid.png",
+  "kool-aid-blue-raspberry-lemonade": "/ProductImages/blueraspberrykoolaid.png",
+  "kool-aid-strawberry-kiwi": "/ProductImages/strawberrykiwikoolaid.png",
+  "alani-nu": "/ProductImages/alaniNu.png",
+  "nutella-sticks": "/ProductImages/nutella-bready.png",
+  "minute-maid-juice": "/ProductImages/minutemaid.png",
+  "fruit-roll-ups": "/ProductImages/fruitrollup.jpg",
+  "chocolate-chip-cookies": "/ProductImages/singlecookie.png",
+  "kitkat-mega-bar": "/ProductImages/kitkatMega.jpg",
+  "takis-intense-nacho": "/ProductImages/takiIntenseNacho.jpg",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Catalog
@@ -53,6 +72,7 @@ type SeedProduct = {
   slug: string;
   name: string;
   description: string;
+  sizeProduct: string;
   priceCents: number;
   category: "sweet" | "savory" | "drinks" | "healthy";
   rarity: Rarity;
@@ -63,250 +83,169 @@ type SeedProduct = {
 
 const PRODUCTS: SeedProduct[] = [
   {
-    slug: "gummy-bear-pouch",
-    name: "Gummy Bear Pouch",
-    description: "A fistful of fruit-flavoured gummy bears in a resealable pouch.",
+    slug: "gatorade-fruit-punch",
+    name: "Gatorade Fruit Punch",
+    description: "Fruit Punch flavour sports drink.",
+    sizeProduct: "591 mL",
+    priceCents: 300,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 10,
+  },
+  {
+    slug: "gatorade-lemon-lime",
+    name: "Gatorade Lemon-Lime",
+    description: "Lemon-Lime flavour sports drink.",
+    sizeProduct: "591 mL",
+    priceCents: 300,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 10,
+  },
+  {
+    slug: "gatorade-orange",
+    name: "Gatorade Orange",
+    description: "Orange flavour sports drink.",
+    sizeProduct: "591 mL",
+    priceCents: 300,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 10,
+  },
+  {
+    slug: "gatorade-cool-blue",
+    name: "Gatorade Cool Blue",
+    description: "Cool Blue flavour sports drink.",
+    sizeProduct: "591 mL",
+    priceCents: 300,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 10,
+  },
+  {
+    slug: "kool-aid-grape",
+    name: "Kool-Aid Grape",
+    description: "Purple grape flavored drink pouch.",
+    sizeProduct: "180 mL pouch",
+    priceCents: 200,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 24,
+  },
+  {
+    slug: "kool-aid-cherry",
+    name: "Kool-Aid Cherry",
+    description: "Red cherry flavored drink pouch.",
+    sizeProduct: "180 mL pouch",
+    priceCents: 200,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 24,
+  },
+  {
+    slug: "kool-aid-blue-raspberry-lemonade",
+    name: "Kool-Aid Blue Raspberry Lemonade",
+    description: "Blue raspberry lemonade flavored drink pouch.",
+    sizeProduct: "180 mL pouch",
+    priceCents: 200,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 24,
+  },
+  {
+    slug: "kool-aid-strawberry-kiwi",
+    name: "Kool-Aid Strawberry Kiwi",
+    description: "Strawberry kiwi flavored drink pouch.",
+    sizeProduct: "180 mL pouch",
+    priceCents: 200,
+    category: "drinks",
+    rarity: "COMMON",
+    allergens: [],
+    stockQty: 24,
+  },
+  {
+    slug: "alani-nu",
+    name: "Alani Nu",
+    description: "Energy drink variety pack in assorted Alani flavours.",
+    sizeProduct: "355 mL",
+    priceCents: 300,
+    category: "drinks",
+    rarity: "UNCOMMON",
+    allergens: [],
+    stockQty: 24,
+  },
+  {
+    slug: "nutella-sticks",
+    name: "Nutella Sticks",
+    description: "Creamy hazelnut chocolate sticks for a quick snack.",
+    sizeProduct: "22 g",
     priceCents: 150,
     category: "sweet",
-    rarity: "COMMON",
-    allergens: [],
-    stockQty: 40,
-  },
-  {
-    slug: "sour-rainbow-belts",
-    name: "Sour Rainbow Belts",
-    description: "Long sour candy belts, five colours, aggressively tangy.",
-    priceCents: 175,
-    category: "sweet",
-    rarity: "COMMON",
-    allergens: ["SULPHITES"],
-    stockQty: 35,
-  },
-  {
-    slug: "milk-chocolate-bar",
-    name: "Milk Chocolate Bar",
-    description: "Standard 45 g milk chocolate bar. Melts in a warm backpack.",
-    priceCents: 250,
-    category: "sweet",
     rarity: "UNCOMMON",
-    allergens: ["DAIRY", "SOY"],
-    stockQty: 24,
-  },
-  {
-    slug: "peanut-butter-cups",
-    name: "Peanut Butter Cups",
-    description: "Two chocolate cups filled with sweetened peanut butter.",
-    priceCents: 275,
-    category: "sweet",
-    rarity: "RARE",
-    allergens: ["PEANUTS", "DAIRY", "SOY"],
-    stockQty: 18,
-  },
-  {
-    slug: "golden-cookie-crate",
-    name: "Golden Cookie Crate",
-    description:
-      "Six bakery-style chocolate chunk cookies in a share box. One per lunch service.",
-    priceCents: 500,
-    category: "sweet",
-    rarity: "LEGENDARY",
-    allergens: ["GLUTEN", "DAIRY", "EGGS", "SOY"],
-    stockQty: 6,
-  },
-  {
-    slug: "salted-pretzel-twists",
-    name: "Salted Pretzel Twists",
-    description: "Crunchy salted pretzel twists, single-serve bag.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "COMMON",
-    allergens: ["GLUTEN"],
-    stockQty: 30,
-  },
-  // Real physical stock: individual bags from a Costco Doritos variety
-  // multibox (Frito-Lay Classic Mix, 30ct — costco.com/100383609), sold as
-  // separate flavors so students pick one. Allergen lists here follow the
-  // same rule as every other product in this file: plausible from the
-  // published flavor profile, NOT sourced from an actual ingredient label —
-  // see the file header and docs/HANDOFF.md §4. These must be checked
-  // against real packaging before launch like everything else here.
-  {
-    slug: "doritos-nacho-cheese",
-    name: "Doritos Nacho Cheese",
-    description: "Classic nacho cheese tortilla chips.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "COMMON",
-    allergens: ["DAIRY"],
-    stockQty: 40,
-  },
-  {
-    slug: "doritos-cool-ranch",
-    name: "Doritos Cool Ranch",
-    description: "Tangy, herby ranch-seasoned tortilla chips.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "COMMON",
-    allergens: ["DAIRY"],
-    stockQty: 36,
-  },
-  {
-    slug: "doritos-flamin-hot-nacho",
-    name: "Doritos Flamin' Hot Nacho",
-    description: "Nacho cheese tortilla chips with a hot chili kick.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "UNCOMMON",
-    allergens: ["DAIRY"],
-    stockQty: 26,
-  },
-  {
-    slug: "doritos-spicy-nacho",
-    name: "Doritos Spicy Nacho",
-    description: "Nacho cheese tortilla chips with extra spice.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "UNCOMMON",
-    allergens: ["DAIRY"],
-    stockQty: 24,
-  },
-  {
-    slug: "doritos-spicy-sweet-chili",
-    name: "Doritos Spicy Sweet Chili",
-    description: "Sweet and spicy chili-seasoned tortilla chips.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "RARE",
-    allergens: ["DAIRY", "SOY"],
-    stockQty: 18,
-  },
-  // Chip assortment (non-Doritos), same "just pick real, common snacks" brief.
-  {
-    slug: "lays-classic",
-    name: "Lay's Classic",
-    description: "Original potato chips, lightly salted.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "COMMON",
-    allergens: [],
-    stockQty: 30,
-  },
-  {
-    slug: "cheetos-crunchy",
-    name: "Cheetos Crunchy",
-    description: "Crunchy cheese-flavoured corn puffs.",
-    priceCents: 200,
-    category: "savory",
-    rarity: "UNCOMMON",
-    allergens: ["DAIRY"],
+    allergens: ["DAIRY", "GLUTEN", "TREE_NUTS"],
     stockQty: 22,
   },
   {
-    slug: "ruffles-original",
-    name: "Ruffles Original",
-    description: "Ridged potato chips, lightly salted.",
-    priceCents: 200,
-    category: "savory",
+    slug: "fruit-roll-ups",
+    name: "Fruit Roll-Ups",
+    description: "Fruit-flavoured chewy snack strips.",
+    sizeProduct: "12 g",
+    priceCents: 100,
+    category: "sweet",
     rarity: "COMMON",
-    allergens: [],
-    stockQty: 28,
+    allergens: ["GLUTEN"],
+    stockQty: 36,
   },
   {
-    // Deliberately sold out so the catalog's disabled "Sold out" state has
-    // something to render against.
-    slug: "loaded-nacho-box",
-    name: "Loaded Nacho Box",
-    description: "Tortilla chips, warm cheese sauce, jalapeños. Made to order.",
-    priceCents: 450,
-    category: "savory",
-    rarity: "EPIC",
-    allergens: ["DAIRY", "GLUTEN"],
-    stockQty: 0,
-  },
-  {
-    slug: "sparkling-berry-water",
-    name: "Sparkling Berry Water",
-    description: "Unsweetened sparkling water with natural mixed berry flavour.",
-    priceCents: 200,
+    slug: "minute-maid-juice",
+    name: "Minute Maid Juice",
+    description: "Classic fruit juice.",
+    sizeProduct: "200 mL",
+    priceCents: 125,
     category: "drinks",
-    rarity: "COMMON",
-    allergens: [],
-    stockQty: 48,
-  },
-  {
-    slug: "chocolate-milk-carton",
-    name: "Chocolate Milk Carton",
-    description: "Cold 250 ml carton of chocolate milk.",
-    priceCents: 225,
-    category: "drinks",
-    rarity: "UNCOMMON",
-    allergens: ["DAIRY"],
-    stockQty: 26,
-  },
-  // Real ready-to-drink pouches, one per requested color. Jammers (not the
-  // powder packets) — a resealable-straw pouch is what's actually practical
-  // to resell at a locker pickup, and Kraft Heinz markets this exact line
-  // for school lunches. Allergen lists here are the same file-wide caveat:
-  // plausible from the published flavor, not sourced — see file header.
-  {
-    slug: "kool-aid-jammers-grape",
-    name: "Kool-Aid Jammers Grape",
-    description: "Grape-flavoured drink pouch, 6 fl oz.",
-    priceCents: 175,
-    category: "drinks",
-    rarity: "COMMON",
-    allergens: [],
-    stockQty: 32,
-  },
-  {
-    slug: "kool-aid-jammers-cherry",
-    name: "Kool-Aid Jammers Cherry",
-    description: "Cherry-flavoured drink pouch, 6 fl oz.",
-    priceCents: 175,
-    category: "drinks",
-    rarity: "COMMON",
-    allergens: [],
-    stockQty: 32,
-  },
-  {
-    slug: "kool-aid-jammers-blue-raspberry",
-    name: "Kool-Aid Jammers Blue Raspberry",
-    description: "Blue raspberry-flavoured drink pouch, 6 fl oz.",
-    priceCents: 175,
-    category: "drinks",
-    rarity: "UNCOMMON",
-    allergens: [],
-    stockQty: 28,
-  },
-  {
-    slug: "apple-slices-cup",
-    name: "Apple Slices Cup",
-    description: "Fresh-cut apple slices, cut the morning of service.",
-    priceCents: 175,
-    category: "healthy",
     rarity: "COMMON",
     allergens: [],
     stockQty: 30,
   },
   {
-    slug: "trail-mix-bag",
-    name: "Trail Mix Bag",
-    description: "Peanuts, almonds, raisins and chocolate chunks.",
-    priceCents: 300,
-    category: "healthy",
+    slug: "chocolate-chip-cookies",
+    name: "Chocolate Chip Cookie",
+    description: "Soft baked chocolate chip cookies.",
+    sizeProduct: "454 g",
+    priceCents: 150,
+    category: "sweet",
     rarity: "RARE",
-    allergens: ["PEANUTS", "TREE_NUTS", "SOY"],
-    stockQty: 14,
+    allergens: ["GLUTEN", "DAIRY", "EGGS", "SOY"],
+    stockQty: 16,
   },
   {
-    slug: "greek-yogurt-parfait",
-    name: "Greek Yogurt Parfait",
-    description: "Greek yogurt layered with granola and berry compote.",
-    priceCents: 400,
-    category: "healthy",
-    rarity: "EPIC",
-    allergens: ["DAIRY", "GLUTEN"],
-    stockQty: 10,
+    slug: "kitkat-mega-bar",
+    name: "KitKat Mega Bar",
+    description: "Crispy wafer fingers covered in smooth milk chocolate.",
+    sizeProduct: "42 g",
+    priceCents: 350,
+    category: "sweet",
+    rarity: "UNCOMMON",
+    allergens: ["GLUTEN", "DAIRY", "SOY"],
+    stockQty: 16,
+  },
+  {
+    slug: "takis-intense-nacho",
+    name: "Takis Intense Nacho",
+    description: "Rolled corn tortilla chips with intense nacho cheese flavour.",
+    sizeProduct: "280 g (9.9 oz) large bag",
+    priceCents: 500,
+    category: "savory",
+    rarity: "RARE",
+    allergens: ["DAIRY", "SOY"],
+    stockQty: 12,
   },
 ];
 
@@ -319,24 +258,24 @@ const PRODUCTS: SeedProduct[] = [
  * throughput, are school sign-off items (CLAUDE.md §7).
  */
 const SLOT_TEMPLATE = [
-  { label: "Lunch A", startTime: "11:50", location: "Locker bank C", capacity: 24 },
-  { label: "Lunch B", startTime: "12:20", location: "Locker bank C", capacity: 24 },
-  { label: "Lunch C", startTime: "12:50", location: "Main hall table", capacity: 18 },
+  { label: "Pickup 1", startTime: "07:50", location: "Locker B449", capacity: 24 },
+  { label: "Pickup 2", startTime: "10:50", location: "Hub", capacity: 24 },
+  { label: "Pickup 3", startTime: "11:20", location: "Hub", capacity: 18 },
+  { label: "Pickup 4", startTime: "14:30", location: "Locker B449", capacity: 18 },
 ];
 
-/** How many days forward to seed, starting today. */
+/** Seed the current day plus a few upcoming service days so the pickup picker
+ * shows the next available windows instead of a blank list during an empty slot
+ * rollout or a short early-morning gap.
+ */
 const SLOT_DAYS = 7;
 
 /**
- * Local midnight of today + offset. Local, not UTC: the cutoff check builds the
- * slot's real instant with `new Date(serviceDate).setHours(h, m)`, which is
- * local-time arithmetic. See docs/HANDOFF.md — timezone handling is open.
+ * UTC-midnight date key for the school's calendar day plus offset.
  */
 function serviceDay(offset: number): Date {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  d.setDate(d.getDate() + offset);
-  return d;
+  const p = schoolParts();
+  return new Date(Date.UTC(p.year, p.month - 1, p.day + offset));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -352,6 +291,27 @@ const SETTINGS: Record<string, string> = {
 };
 
 async function main() {
+  const productSlugs = PRODUCTS.map((p) => p.slug);
+
+  // Remove stale catalog items that are no longer in the active seed set.
+  await db.product.deleteMany({
+    where: {
+      OR: [
+        { slug: { notIn: productSlugs } },
+        { slug: { in: ["kool-aid-green-apple", "green-apple", "greenapple"] } },
+      ],
+    },
+  });
+
+  // Remove stale future pickup slots so a reseed does not keep showing the old
+  // multi-day list alongside the new single-day schedule.
+  await db.pickupSlot.deleteMany({
+      where: {
+        serviceDate: { gte: serviceDay(0) },
+        orders: { none: {} },
+      },
+  });
+
   // ── Products ──────────────────────────────────────────────────────────────
   for (const [i, p] of PRODUCTS.entries()) {
     const sortOrder = (i + 1) * 10;
@@ -361,13 +321,14 @@ async function main() {
         slug: p.slug,
         name: p.name,
         description: p.description,
+        sizeProduct: p.sizeProduct,
         priceCents: p.priceCents,
         category: p.category,
         rarity: p.rarity,
         allergens: p.allergens,
         stockQty: p.stockQty,
         active: p.active ?? true,
-        imageUrl: `/products/${p.slug}.svg`,
+        imageUrl: PRODUCT_IMAGES[p.slug] ?? `/ProductImages/${p.slug}.png`,
         sortOrder,
       },
       update: {
@@ -375,12 +336,13 @@ async function main() {
         // file header.
         name: p.name,
         description: p.description,
+        sizeProduct: p.sizeProduct,
         priceCents: p.priceCents,
         category: p.category,
         rarity: p.rarity,
         allergens: p.allergens,
         active: p.active ?? true,
-        imageUrl: `/products/${p.slug}.svg`,
+        imageUrl: PRODUCT_IMAGES[p.slug] ?? `/ProductImages/${p.slug}.png`,
         sortOrder,
         ...(RESET_STOCK ? { stockQty: p.stockQty } : {}),
       },

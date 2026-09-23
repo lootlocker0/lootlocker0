@@ -2,11 +2,11 @@
 
 import Link from "next/link";
 import { useCart } from "@/stores/cart";
-import { LockerMark } from "@/components/brand/LockerMark";
 
 const LINKS = [
-  { href: "/snacks", label: "The Locker" },
+  { href: "/snacks", label: "The Loot" },
   { href: "/about", label: "Mission Briefing" },
+  { href: "/locker", label: "The Locker" },
 ];
 
 /**
@@ -30,14 +30,14 @@ export function Nav() {
       >
         <Link
           href="/"
+          aria-label="LootLockers home"
           className="flex items-center gap-2 font-display text-xl uppercase tracking-wide text-brand"
         >
           <img
             src="/logo.png"
-            alt="LootLockers logo"
-            className="h-8 w-8 rounded-md object-cover"
+            alt=""
+            className="h-12 w-36 rounded-md object-contain"
           />
-          <span className="hidden sm:inline">LootLockers</span>
         </Link>
 
         <ul className="flex items-center gap-6">

@@ -43,7 +43,7 @@ export function RarityCard({
         {meta.label}
       </span>
 
-      <div className="aspect-square w-full overflow-hidden bg-surface-lowest">
+      <div className="flex aspect-square h-full w-full items-center justify-center overflow-hidden bg-surface-lowest">
         <ProductImage
           src={imageUrl}
           alt=""

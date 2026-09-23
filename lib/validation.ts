@@ -57,6 +57,17 @@ export const productQuerySchema = z.object({
 
 export type ProductQuery = z.infer<typeof productQuerySchema>;
 
+export const accountSignupSchema = z.object({
+  username: z.string().trim().min(3).max(30).regex(/^[a-zA-Z0-9_]+$/),
+  email: z.string().trim().toLowerCase().pipe(z.email().max(160)),
+  password: z.string().min(8).max(200),
+});
+
+export const accountLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().pipe(z.email().max(160)),
+  password: z.string().min(1).max(200),
+});
+
 // ─────────────────────────────────────────────────────────────────────────────
 // POST /api/checkout
 // ─────────────────────────────────────────────────────────────────────────────
@@ -329,11 +340,15 @@ const productSortOrder = z.number().int().min(0).max(9_999);
 /// — which reads as a path and behaves as a remote origin, so it is exactly the
 /// value that slips a third-party URL past a naive "starts with /" check.
 ///
-/// This field is a URL, not an upload. There is no upload endpoint and none is
-/// stubbed: real object storage needs a real credential nobody has issued yet
-/// (docs/HANDOFF.md, P4b). A remote host here is also a third-party request
-/// from a student's browser, so a `NEXT_PUBLIC_SITE_URL`-relative path stays the
-/// recommendation until an allow-list is agreed.
+/// This field itself validates a URL, not a file — the upload lives at
+/// `POST /api/inventory/images`, which writes to `public/ProductImages/` and
+/// hands back a site-relative path for this field. That endpoint exists now;
+/// what it writes to is still local disk, not real object storage
+/// (docs/HANDOFF.md, P4b) — uploads there do not survive a redeploy on a
+/// host with an ephemeral filesystem. A remote `https://` host here is also a
+/// third-party request from a student's browser, so a
+/// `NEXT_PUBLIC_SITE_URL`-relative path stays the recommendation until an
+/// allow-list is agreed.
 const productImageUrl = z
   .string()
   .trim()

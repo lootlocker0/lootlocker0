@@ -7,7 +7,7 @@ import { rarityMeta } from "@/lib/rarity";
 import { ProductGrid } from "@/components/ProductGrid";
 
 export const metadata: Metadata = {
-  title: "The Locker | LootLockers",
+  title: "The Loot | LootLockers",
   description: "Browse every snack in stock, filter by rarity or category.",
 };
 
@@ -80,7 +80,7 @@ export default async function SnacksPage({
   return (
     <div className="mx-auto max-w-6xl px-4 py-10 sm:px-8">
       <h1 className="font-display text-headline-lg uppercase text-rarity-epic">
-        The Locker
+        The Loot
       </h1>
       <p className="mt-2 max-w-xl text-text-dim">
         Everything in stock right now. Sold-out items stay listed so you can

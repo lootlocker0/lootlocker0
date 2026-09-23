@@ -23,11 +23,15 @@ export async function inventoryFetch<T>(
 ): Promise<InventoryResult<T>> {
   let res: Response;
   try {
+    const isFormData = init?.body instanceof FormData;
     res = await fetch(path, {
       ...init,
       credentials: "same-origin",
       cache: "no-store",
-      headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
+      headers: {
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        ...(init?.headers ?? {}),
+      },
     });
   } catch {
     return {

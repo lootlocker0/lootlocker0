@@ -1,5 +1,6 @@
 import { AngledPanel } from "@/components/ui/AngledPanel";
 import { formatCents } from "@/lib/money";
+import { formatSlotTime } from "@/lib/timezone";
 import { OrderRow } from "./OrderRow";
 import type { AdminSlot } from "./types";
 
@@ -32,7 +33,7 @@ export function SlotSection({
       >
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-display text-headline-md uppercase text-text">
-            {slot.startTime} · {slot.label}
+            {formatSlotTime(slot.startTime)} · {slot.label}
             {!slot.active && (
               <span className="ml-3 border-2 border-danger px-2 py-0.5 align-middle font-mono text-[11px] text-danger">
                 INACTIVE — orders still valid

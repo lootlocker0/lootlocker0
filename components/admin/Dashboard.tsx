@@ -94,6 +94,27 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
     setState({ status: "ready", data: res.data });
   }, [date, showPending, onUnauthorized]);
 
+  useEffect(() => {
+    let inFlight = false;
+
+    async function refreshWhenVisible() {
+      if (document.visibilityState === "hidden" || inFlight) return;
+      inFlight = true;
+      try {
+        await load();
+      } finally {
+        inFlight = false;
+      }
+    }
+
+    const interval = window.setInterval(refreshWhenVisible, 10_000);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(interval);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [load]);
+
   async function signOut() {
     setSigningOut(true);
     await adminFetch("/api/admin/logout", { method: "POST" });
@@ -142,7 +163,26 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
         </div>
       </header>
 
-      <main className="px-4 py-8 sm:px-8">
+      <div className="flex flex-col lg:flex-row">
+        <aside className="admin-no-print border-b border-white/10 bg-surface-2 px-4 py-4 lg:min-h-[calc(100vh-81px)] lg:w-64 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
+          <nav aria-label="Staff tools" className="flex gap-2 lg:flex-col">
+            <a
+              href="/admin"
+              aria-current="page"
+              className="border-2 border-brand bg-brand/10 px-3 py-2 font-mono text-xs uppercase text-brand"
+            >
+              Orders
+            </a>
+            <a
+              href="/inventory"
+              className="border-2 border-white/10 px-3 py-2 font-mono text-xs uppercase text-text-dim transition-colors hover:border-brand hover:text-brand"
+            >
+              Catalog / Add product
+            </a>
+          </nav>
+        </aside>
+
+        <main className="min-w-0 flex-1 px-4 py-8 sm:px-8">
         {state.status === "loading" && (
           <p role="status" className="text-text-dim">
             Loading orders…
@@ -170,7 +210,8 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
             </section>
           </>
         )}
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

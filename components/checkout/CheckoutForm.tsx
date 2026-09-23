@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { loadStripe, type Stripe } from "@stripe/stripe-js";
@@ -123,6 +123,29 @@ export function CheckoutForm() {
   );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<CheckoutError | null>(null);
+
+  // Best-effort prefill from a signed-in account (the Locker) — never blocks
+  // or errors the form if it's missing/fails, and never overwrites something
+  // the student already typed (the functional setState reads the CURRENT
+  // value at the moment this resolves, not the value from render time, so a
+  // fast typist racing a slow fetch still wins). Guest checkout is
+  // unaffected either way: no cookie means this fetch just 401s and no-ops.
+  useEffect(() => {
+    fetch("/api/account/me", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const payload = (await res.json()) as {
+          user?: { name: string | null; username: string; email: string };
+        };
+        const account = payload.user;
+        if (!account) return;
+        setStudentName((cur) => cur || account.name || account.username);
+        setEmail((cur) => cur || account.email);
+      })
+      .catch(() => {
+        /* guest checkout must work with no account at all */
+      });
+  }, []);
   const [card, setCard] = useState<CardResult | null>(null);
 
   // Checked BEFORE the empty-cart guard below, deliberately: the order this
@@ -143,13 +166,13 @@ export function CheckoutForm() {
           Extraction Point
         </h1>
         <p className="mt-4 text-text-dim">
-          Your loadout is empty. Head to The Locker to build it first.
+          Your loadout is empty. Head to The Loot to build it first.
         </p>
         <Link
           href="/snacks"
           className="clip-shard mx-auto mt-8 inline-flex items-center justify-center bg-gold px-8 py-3 font-display uppercase tracking-wide text-void transition-transform hover:brightness-110 active:scale-[.97]"
         >
-          Browse The Locker
+          Browse The Loot
         </Link>
       </div>
     );

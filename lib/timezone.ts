@@ -40,6 +40,18 @@ export interface SchoolClockParts {
   second: number;
 }
 
+export function formatSlotTime(startTime: string): string {
+  const match = HH_MM.exec(startTime);
+  if (!match) return startTime;
+
+  const hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const hour12 = hour % 12 || 12;
+  const suffix = hour < 12 ? "am" : "pm";
+
+  return `${hour12}:${String(minute).padStart(2, "0")} ${suffix}`;
+}
+
 /// What the clock on the cafeteria wall reads at a given instant.
 export function schoolParts(instant: Date = new Date()): SchoolClockParts {
   const map: Record<string, string> = {};
