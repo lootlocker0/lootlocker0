@@ -1,10 +1,25 @@
 import { NextResponse, type NextRequest } from "next/server";
+import type { OrderStatus } from "@prisma/client";
 import { db } from "@/lib/db";
 import { errorResponse } from "@/lib/errors";
 import { requireAccountUser } from "@/lib/account-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+// Same rule as GET /api/orders/[orderNumber]: the pickup code is a bearer
+// token at the locker and must not be shown for an order that isn't
+// genuinely claimable yet (a PENDING card order can still expire unpaid and
+// give its stock/seat back). Kept in sync with that route's
+// CODE_VISIBLE_STATUSES rather than imported, since the two routes'
+// AppError/not-found semantics differ enough that sharing more than this
+// set isn't worth the coupling.
+const CODE_VISIBLE_STATUSES: ReadonlySet<OrderStatus> = new Set<OrderStatus>([
+  "RESERVED",
+  "PAID",
+  "PACKED",
+  "PICKED_UP",
+]);
 
 // A signed-in account's own order history — the only route in this codebase
 // that lists more than one order for one identity. Hard auth requirement
@@ -69,7 +84,15 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json(
-      { orders },
+      {
+        orders: orders.map(({ pickupCode, ...order }) => ({
+          ...order,
+          // Present only when the order is actually claimable — omitted, not
+          // null, so a UI that renders truthiness cannot show an empty
+          // locker code box. See CODE_VISIBLE_STATUSES above.
+          ...(CODE_VISIBLE_STATUSES.has(order.status) ? { pickupCode } : {}),
+        })),
+      },
       { headers: { "Cache-Control": "no-store" } },
     );
   } catch (error) {

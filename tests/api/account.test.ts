@@ -8,6 +8,7 @@ import {
   paymentIntentSucceeded,
   postCheckout,
   postWebhook,
+  seedPendingCardOrder,
   seedProduct,
   seedSlot,
   signupAccount,
@@ -265,5 +266,27 @@ describe("GET /api/account/orders", () => {
     const r = await getAccountOrders(account.cookie);
     expect(r.status).toBe(200);
     expect(r.body.orders).toHaveLength(0);
+  });
+
+  it("omits pickupCode from order history until the order is genuinely claimable", async () => {
+    const account = await signupAccount({ username: "code_gate_kid" });
+    const order = await seedPendingCardOrder({
+      totalCents: 500,
+      accountCookie: account.cookie,
+    });
+
+    // Still PENDING: a card order that has not been confirmed by a webhook
+    // yet may still expire and give its stock/seat back. Showing a code here
+    // would put a student at the locker holding a code for nothing.
+    const pending = await getAccountOrders(account.cookie);
+    expect(pending.body.orders[0].status).toBe("PENDING");
+    expect(pending.body.orders[0]).not.toHaveProperty("pickupCode");
+
+    await postWebhook(paymentIntentSucceeded(order.stripePaymentIntentId!, 500));
+
+    // Now PAID and genuinely claimable — the code must appear.
+    const paid = await getAccountOrders(account.cookie);
+    expect(paid.body.orders[0].status).toBe("PAID");
+    expect(paid.body.orders[0].pickupCode).toBeTruthy();
   });
 });

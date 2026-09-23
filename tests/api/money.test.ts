@@ -126,7 +126,9 @@ describe("money integrity and input tampering", () => {
   });
 
   /**
-   * The 45-minute cutoff, exercised across a calendar-day boundary.
+   * No advance-notice cutoff — a slot is orderable right up until its own
+   * start time — but the boundary itself must still land on the correct
+   * minute, on the SCHOOL's clock, not the server's.
    *
    * The test process is in Pacific/Kiritimati (UTC+14) and the server is in
    * Asia/Tokyo (UTC+9); the school is America/Vancouver (UTC-7). For most of
@@ -136,22 +138,20 @@ describe("money integrity and input tampering", () => {
    * `setHours` implementation lands hours or a whole day away and this test
    * goes red — which a UTC-only suite would not.
    */
-  it("enforces the cutoff to the minute, in the school's timezone", async () => {
+  it("stays open until a slot's own start time, to the minute, in the school's timezone", async () => {
     const p = await seedProduct({ stockQty: 10 });
 
-    const okSlot = await seedSlotMinutesFromNow(46, 5);
-    const noSlot = await seedSlotMinutesFromNow(44, 5);
+    const okSlot = await seedSlotMinutesFromNow(2, 5);
+    const noSlot = await seedSlotMinutesFromNow(-2, 5);
 
     // Sanity-check the fixture itself before trusting the assertion: the slot
-    // really is 46 / 44 minutes out as an absolute instant.
+    // really is 2 minutes ahead / 2 minutes past as an absolute instant.
     const okMinutes =
       (slotStartInstant(okSlot.serviceDate, okSlot.startTime).getTime() - Date.now()) / 60_000;
     const noMinutes =
       (slotStartInstant(noSlot.serviceDate, noSlot.startTime).getTime() - Date.now()) / 60_000;
-    expect(okMinutes).toBeGreaterThan(45);
-    expect(okMinutes).toBeLessThanOrEqual(46);
-    expect(noMinutes).toBeGreaterThan(43);
-    expect(noMinutes).toBeLessThan(45);
+    expect(okMinutes).toBeGreaterThan(0);
+    expect(noMinutes).toBeLessThanOrEqual(0);
 
     const ok = await postCheckout(
       checkoutPayload({ slotId: okSlot.id, items: [{ productId: p.id, qty: 1 }] }),
@@ -165,9 +165,9 @@ describe("money integrity and input tampering", () => {
     expect(no.body.error.code).toBe("PAST_CUTOFF");
   });
 
-  it("closes a window on the school's clock, not the server's calendar day", async () => {
+  it("closes a window the instant it starts, on the school's clock, not the server's calendar day", async () => {
     // A window at 12:20 Vancouver time today. Whatever the server's zone is,
-    // this either is or is not past its cutoff on the school's clock, and the
+    // this either has or has not started yet on the school's clock, and the
     // test computes the expectation the same way lib/timezone.ts does.
     const now = schoolParts();
     const slot = await seedSlot({
@@ -178,8 +178,7 @@ describe("money integrity and input tampering", () => {
     const p = await seedProduct({ stockQty: 5 });
 
     const startsAt = slotStartInstant(slot.serviceDate, slot.startTime);
-    const minutesOut = (startsAt.getTime() - Date.now()) / 60_000;
-    const shouldBeOpen = minutesOut > 45;
+    const shouldBeOpen = startsAt.getTime() > Date.now();
 
     const r = await postCheckout(
       checkoutPayload({ slotId: slot.id, items: [{ productId: p.id, qty: 1 }] }),

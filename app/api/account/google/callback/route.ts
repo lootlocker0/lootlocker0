@@ -3,9 +3,11 @@ import { db } from "@/lib/db";
 import { AppError, errorResponse } from "@/lib/errors";
 import {
   assertGoogleOAuthConfigured,
+  clearedOAuthStateCookie,
   consumeOAuthState,
   createAccountSession,
   accountUserSelect,
+  oauthStateMatchesCookie,
 } from "@/lib/account-auth";
 
 export const runtime = "nodejs";
@@ -54,11 +56,25 @@ async function upsertGoogleUser(profile: GoogleProfile) {
   const existingEmail = await db.user.findUnique({ where: { email } });
   if (existingEmail) {
     if (existingEmail.googleId && existingEmail.googleId !== profile.sub) throw new AppError("OAUTH_FAILED");
-    return db.user.update({
-      where: { id: existingEmail.id },
-      data: { googleId: profile.sub, ...(!existingEmail.name && name ? { name } : {}) },
-      select: accountUserSelect,
-    });
+    // Google has already proven ownership of this email (email_verified must
+    // be true, checked above). Linking here is the moment the real owner is
+    // proven — not whoever set the original password. If an attacker had
+    // created this account with a password to squat the email, their
+    // password must stop working and their sessions must die right now, or
+    // linking a Google identity would do nothing to close their access.
+    const [updated] = await db.$transaction([
+      db.user.update({
+        where: { id: existingEmail.id },
+        data: {
+          googleId: profile.sub,
+          passwordHash: null,
+          ...(!existingEmail.name && name ? { name } : {}),
+        },
+        select: accountUserSelect,
+      }),
+      db.accountSession.deleteMany({ where: { userId: existingEmail.id } }),
+    ]);
+    return updated;
   }
 
   const base = usernameBase(email, profile.name);
@@ -81,7 +97,13 @@ export async function GET(req: NextRequest) {
     assertGoogleOAuthConfigured();
     const code = req.nextUrl.searchParams.get("code");
     const state = req.nextUrl.searchParams.get("state");
-    if (!code || !state || !(await consumeOAuthState(state))) throw new AppError("OAUTH_FAILED");
+    // Cookie check first — cheap, no DB round trip, and it's the check that
+    // actually stops OAuth login CSRF (see oauthStateCookie's comment): the
+    // DB-side consumeOAuthState alone proves the value is genuine and
+    // single-use, not that THIS browser is the one /start issued it to.
+    if (!code || !state || !oauthStateMatchesCookie(req, state) || !(await consumeOAuthState(state))) {
+      throw new AppError("OAUTH_FAILED");
+    }
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -106,8 +128,20 @@ export async function GET(req: NextRequest) {
     const cookie = await createAccountSession(user.id);
     const response = NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_SITE_URL ?? req.nextUrl.origin));
     response.cookies.set(cookie);
+    response.cookies.set(clearedOAuthStateCookie());
     return response;
   } catch (error) {
-    return errorResponse(error);
+    // errorResponse() returns a plain Fetch Response (Response.json(...)),
+    // not a NextResponse, so it has no .cookies API to clear the state
+    // cookie on. Rebuild it as a NextResponse with the identical body/status
+    // rather than changing errorResponse()'s shared return type for every
+    // other route in the codebase.
+    const errRes = errorResponse(error);
+    const body = await errRes.json();
+    const response = NextResponse.json(body, { status: errRes.status });
+    // Single-use either way: a failed attempt must not leave a live
+    // state-bound cookie for a later request to reuse.
+    response.cookies.set(clearedOAuthStateCookie());
+    return response;
   }
 }

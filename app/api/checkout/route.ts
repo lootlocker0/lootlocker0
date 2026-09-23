@@ -26,7 +26,9 @@ export const dynamic = "force-dynamic";
 //   1. validate            reject before touching anything
 //   2. rate limit          per IP and per email
 //   3. reprice from the DB the client's total is evidence, never input
-//   4. cutoff              in the school's timezone, not the server's
+//   4. slot-time check     reject a slot whose start time has already passed,
+//                          in the school's timezone, not the server's — no
+//                          advance-notice cutoff beyond that
 //   5. TRANSACTION         advisory lock (email+day) -> daily spend cap
 //                          -> book_slot -> reserve_stock (sorted) -> create order
 //   6. payment             cash is already done; card opens a PaymentIntent
@@ -157,8 +159,15 @@ export async function POST(req: NextRequest) {
     // a child's daily limit in the middle of the school day.
     const startOfDay = schoolDayStartInstant();
 
-    // No checkout cutoff. Customers can place orders for any valid pickup slot
-    // at any time; the slot remains available until staff or the system closes it.
+    // No advance-notice cutoff (e.g. no "must order 45 minutes ahead" rule) —
+    // customers can place an order right up until a slot's own start time.
+    // What is NOT optional is rejecting a slot whose start time has already
+    // passed: nothing else in this codebase ever deactivates a slot once its
+    // window opens (`active` is a manual staff/seed flag, not a clock), and
+    // `GET /api/slots` only filters by calendar day, so a stale tab or a
+    // replayed request with this morning's slotId would otherwise still
+    // reserve a seat, decrement stock, and charge a card for a pickup that
+    // already happened.
     const slot = await db.pickupSlot.findUnique({
       where: { id: input.slotId },
       select: { id: true, active: true, serviceDate: true, startTime: true },
@@ -168,6 +177,9 @@ export async function POST(req: NextRequest) {
     // another window), and an id-probing response that distinguishes "no such
     // slot" from "full" tells a scraper more than it tells a student.
     if (!slot || !slot.active) throw new AppError("SLOT_FULL");
+    if (slotStartInstant(slot.serviceDate, slot.startTime).getTime() <= Date.now()) {
+      throw new AppError("PAST_CUTOFF");
+    }
 
     // ── 5. The transaction. ───────────────────────────────────────────────────
     const ttlMin = await getSetting("pending_order_ttl_minutes");

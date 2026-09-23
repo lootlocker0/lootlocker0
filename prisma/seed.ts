@@ -293,14 +293,25 @@ const SETTINGS: Record<string, string> = {
 async function main() {
   const productSlugs = PRODUCTS.map((p) => p.slug);
 
-  // Remove stale catalog items that are no longer in the active seed set.
-  await db.product.deleteMany({
+  // Retire stale catalog items that are no longer in the active seed set.
+  // Deactivate rather than delete: once a real order exists, its OrderItem
+  // rows hold a foreign key to this Product row (order lines snapshot their
+  // own name/price/rarity/allergens per CLAUDE.md §5, but the row itself must
+  // still exist for that FK) — a hard delete throws
+  // order_items_product_id_fkey the first time this runs against a database
+  // with any order history, taking down every future reseed, including the
+  // one triggered by .github/workflows/deploy-db.yml. `active: false` is the
+  // same soft-delete every admin/inventory screen in this app already uses,
+  // and it achieves the actual goal (the item stops showing in the live
+  // catalog) without ever depending on whether it's been ordered.
+  await db.product.updateMany({
     where: {
       OR: [
         { slug: { notIn: productSlugs } },
         { slug: { in: ["kool-aid-green-apple", "green-apple", "greenapple"] } },
       ],
     },
+    data: { active: false },
   });
 
   // Remove stale future pickup slots so a reseed does not keep showing the old
