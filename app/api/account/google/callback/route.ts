@@ -142,7 +142,12 @@ export async function GET(req: NextRequest) {
     if (!profileResponse.ok) throw new AppError("OAUTH_FAILED");
     const user = await upsertGoogleUser((await profileResponse.json()) as GoogleProfile);
     const cookie = await createAccountSession(user.id);
-    const response = NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_SITE_URL ?? req.nextUrl.origin));
+    // `||`, not `??` — an env var set to an empty string is falsy but not
+    // nullish, so `??` would pass "" straight to `new URL("/", "")` and throw
+    // ERR_INVALID_URL. req.nextUrl.origin is always a valid absolute origin
+    // from the real incoming request, so it's a safe fallback either way.
+    const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL || req.nextUrl.origin;
+    const response = NextResponse.redirect(new URL("/", siteOrigin));
     response.cookies.set(cookie);
     response.cookies.set(clearedOAuthStateCookie());
     return response;
