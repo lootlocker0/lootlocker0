@@ -3647,3 +3647,34 @@ backfill or the checkout prefill — verified by hand against the local
 database and the running dev server only. Worth a `tests/api/account.test.ts`
 addition and a `tests/e2e/checkout.spec.ts` addition respectively before
 calling this hardened.
+
+### 91. Product image uploads now use Vercel Blob, not local disk
+
+`POST /api/inventory/images` (P4b) wrote the uploaded file straight to
+`public/ProductImages/` via `fs.writeFile`. That works on a real local disk
+but Vercel's serverless functions run on a read-only filesystem outside
+`/tmp` — every upload attempt on the deployed site failed. Root-caused
+against a real production 403/EROFS-class failure, not just read from the
+code.
+
+New `lib/blob.ts` resolves a mode once per process, same shape as
+`lib/rate-limit.ts`: `blob` (real Vercel Blob, whenever
+`BLOB_READ_WRITE_TOKEN` is set — works in dev, preview, and production
+identically), `disk` (the old local-disk write, kept only as a local-dev
+convenience when no token is configured and `NODE_ENV !== "production"`),
+`fail-closed` (production with no token — throws `IMAGE_STORAGE_NOT_CONFIGURED`,
+503, rather than letting the old code hit the read-only filesystem and
+surface a raw `EROFS` to whoever is adding a product). New env var
+`BLOB_READ_WRITE_TOKEN` in `.env.example`, required in production. Vercel
+auto-injects it once a Blob store is created and linked to the project — no
+manual copy needed there, only for local testing of the `blob` path.
+
+`lib/validation.ts`'s `productImageUrl` schema needed no change: it already
+accepted both a site-relative path and an absolute `https://` URL, and a
+Vercel Blob URL is the latter.
+
+Added `tests/unit/blob.test.ts` covering the `disk` fallback (mode selection,
+a real write+read round trip, and distinct filenames per upload) — the `blob`
+mode itself needs a real Vercel Blob token this harness doesn't have, so it's
+unverified by an automated test; confirm it by hand against the deployed site
+once `BLOB_READ_WRITE_TOKEN` is set.

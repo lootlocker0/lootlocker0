@@ -341,14 +341,14 @@ const productSortOrder = z.number().int().min(0).max(9_999);
 /// value that slips a third-party URL past a naive "starts with /" check.
 ///
 /// This field itself validates a URL, not a file — the upload lives at
-/// `POST /api/inventory/images`, which writes to `public/ProductImages/` and
-/// hands back a site-relative path for this field. That endpoint exists now;
-/// what it writes to is still local disk, not real object storage
-/// (docs/HANDOFF.md, P4b) — uploads there do not survive a redeploy on a
-/// host with an ephemeral filesystem. A remote `https://` host here is also a
-/// third-party request from a student's browser, so a
-/// `NEXT_PUBLIC_SITE_URL`-relative path stays the recommendation until an
-/// allow-list is agreed.
+/// `POST /api/inventory/images`, which hands back the URL for this field
+/// (`lib/blob.ts`). In production that's a real Vercel Blob URL, persisted
+/// independently of any deploy; in local dev without `BLOB_READ_WRITE_TOKEN`
+/// it falls back to a site-relative path under `public/ProductImages/` for
+/// convenience. Either way this schema doesn't care which shape arrives — a
+/// remote `https://` host here is still a third-party request from a
+/// student's browser for anything NOT under Vercel Blob's own origin, so an
+/// allow-list would be the next step if that ever needs tightening.
 const productImageUrl = z
   .string()
   .trim()
