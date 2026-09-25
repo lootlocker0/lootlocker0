@@ -341,14 +341,10 @@ const productSortOrder = z.number().int().min(0).max(9_999);
 /// value that slips a third-party URL past a naive "starts with /" check.
 ///
 /// This field itself validates a URL, not a file — the upload lives at
-/// `POST /api/inventory/images`, which writes to `public/ProductImages/` and
-/// hands back a site-relative path for this field. That endpoint exists now;
-/// what it writes to is still local disk, not real object storage
-/// (docs/HANDOFF.md, P4b) — uploads there do not survive a redeploy on a
-/// host with an ephemeral filesystem. A remote `https://` host here is also a
-/// third-party request from a student's browser, so a
-/// `NEXT_PUBLIC_SITE_URL`-relative path stays the recommendation until an
-/// allow-list is agreed.
+/// `POST /api/inventory/images`, which stores the file in Vercel Blob and
+/// hands back its HTTPS URL for this field. A remote `https://` host here is
+/// also a third-party request from a student's browser, so uploaded Blob URLs
+/// are the approved remote host for this field.
 const productImageUrl = z
   .string()
   .trim()

@@ -3647,3 +3647,12 @@ backfill or the checkout prefill — verified by hand against the local
 database and the running dev server only. Worth a `tests/api/account.test.ts`
 addition and a `tests/e2e/checkout.spec.ts` addition respectively before
 calling this hardened.
+
+## P4b follow-up — [manager] durable product image uploads · 2026-09-24
+
+Resolved the deployment blocker from §64. `POST /api/inventory/images` now
+stores validated uploads in Vercel Blob via `@vercel/blob` and returns the
+durable HTTPS Blob URL. It no longer calls `mkdir` or `writeFile` under
+`public/ProductImages`, so it is compatible with Vercel's read-only
+`/var/task` filesystem. Production requires `BLOB_READ_WRITE_TOKEN`; the
+multipart limits remain 5 MB and JPG/PNG/WEBP/GIF only.

@@ -1620,23 +1620,39 @@ silently re-published as "reviewed".
 gate at write time and not a durable record. `HANDOFF.md` §63 asks for
 `allergensReviewedAt`.
 
-### Photo handling — a URL field, not an upload
+### Photo handling — Vercel Blob upload and URL field
 
-`imageUrl` is a `String`. **There is no upload endpoint, and no stubbed one.**
-Real object storage needs a real credential nobody has issued (the same
-discipline `lib/stripe/payments.ts` applies to the missing Stripe account);
-`HANDOFF.md` §64 is the ask. Accepted values:
+`imageUrl` is a `String`. `POST /api/inventory/images` accepts a multipart image
+and stores it in Vercel Blob. It returns the Blob's HTTPS URL, which the editor
+then saves through the product create or update endpoint. Production requires
+`BLOB_READ_WRITE_TOKEN`.
 
 | Value | Accepted | Why |
 |---|---|---|
 | `/products/foo.svg` | ✅ | Site-relative, what `prisma/seed.ts` writes and `public/` serves |
-| `https://cdn.example.com/foo.jpg` | ✅ | Absolute HTTPS |
+| `https://...blob.vercel-storage.com/foo.jpg` | ✅ | Uploaded product photo |
+| `https://cdn.example.com/foo.jpg` | ✅ | Other absolute HTTPS URL |
 | `http://…` | ❌ | Mixed content on an HTTPS page silently fails to render |
 | `//host/foo.png` | ❌ | Protocol-relative: reads as a path, behaves as a remote origin |
 | `data:` / `javascript:` / `blob:` / `file:` | ❌ | Not a photo location |
 
-Max 512 characters. **Until an upload exists, prefer a site-relative path**: a
-remote host is a third-party request from a student's browser.
+Max 512 characters. Uploaded photos use a durable remote URL and do not write
+to the read-only deployment filesystem.
+
+### `POST /api/inventory/images`
+
+Multipart field: `file`. Accepted types are JPG, PNG, WEBP and GIF; the maximum
+size is 5 MB. The route requires an inventory session.
+
+**Response 201**
+
+```json
+{ "imageUrl": "https://...blob.vercel-storage.com/ProductImages/uuid.jpg" }
+```
+
+**Errors** — `INVALID_INPUT` 400 for a missing, unsupported, empty or oversized
+file; `INVENTORY_UNAUTHORIZED` 401 for a missing session; `INTERNAL` 500 when
+Blob storage is unavailable or not configured.
 
 ---
 
@@ -1880,7 +1896,7 @@ Planned, in build order (shipped rows marked):
 | P4b | `POST /api/inventory/products` | Create a product. Allergens mandatory and affirmed | **Shipped** — §6b |
 | P4b | `GET` · `PATCH /api/inventory/products/[productId]` | Read and edit name, description, price, category, rarity, allergens, photo URL, active, sort order | **Shipped** — §6b |
 | P4b | `POST /api/inventory/products/[productId]/stock` | Atomic relative stock adjustment | **Shipped** — §6b |
-| P4b | `POST /api/inventory/images` | Photo upload, multipart, writes to local disk | **Shipped** — §6b, but not durable storage: `public/ProductImages/` does not survive a redeploy on an ephemeral filesystem host. Real object storage still not built, deliberately — needs a credential nobody has issued (`HANDOFF.md` §64) |
+| P4b | `POST /api/inventory/images` | Photo upload, multipart, durable Vercel Blob storage | **Shipped** — §6b |
 
 ---
 
@@ -1917,13 +1933,9 @@ shortcut around allergen review, slug uniqueness, or integer-cent pricing.
    other invariant the human path already enforces. Use this when adding
    products from a script or an agent session rather than a browser.
 
-**Known limitation, all three paths:** photo uploads (`POST
-/api/inventory/images`) write to local disk (`public/ProductImages/`), not
-durable object storage. On a host with an ephemeral filesystem (e.g.
-Vercel), an uploaded photo does not survive the next deploy. This is a
-pre-existing, already-flagged gap (`docs/HANDOFF.md` §64) — fixing it means
-choosing and wiring a real storage provider, which is not part of adding a
-product and is not done here.
+Photo uploads from all three paths use Vercel Blob, so they survive redeploys
+and are available to every inventory editor. The deployment must provide
+`BLOB_READ_WRITE_TOKEN`.
 
 **`sizeProduct` only exists in path 2.** `inventoryProductCreateSchema` and
 `inventoryProductUpdateSchema` are both `.strict()` and neither lists
