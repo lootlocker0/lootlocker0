@@ -341,12 +341,18 @@ describe("design tokens — no raw hex outside the two files allowed to hold one
    *     the theme-color meta tag above, this is a fixed external brand
    *     requirement with no app design token to route it through, not a
    *     colour this app is free to reskin.
+   *   · `lib/email.ts` — the welcome-email HTML template. Email clients do
+   *     not support CSS custom properties (or `clip-path`, or webfonts in
+   *     most cases), so every colour here is a hand-copied hex equivalent of
+   *     the real token, inlined as `style="..."` — there is no other way to
+   *     express `app/globals.css`'s tokens inside an email body.
    */
   const ALLOWED = new Set([
     "app/globals.css",
     "lib/rarity.ts",
     "app/layout.tsx",
     "components/account/LockerSignIn.tsx",
+    "lib/email.ts",
   ]);
 
   it("no source file outside globals.css, lib/rarity.ts and layout.tsx's theme-color hardcodes a colour", () => {
