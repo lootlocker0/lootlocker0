@@ -103,7 +103,7 @@ function welcomeEmailText(recipientName: string | null): string {
     `Start shopping: ${SITE_URL}`,
     "",
     "LootLockers — snacks made simple.",
-    "[SCHOOL/MAILING ADDRESS]",
+    "Sullivan Heights Secondary School, 6248-144 Street, Surrey, BC V3X 1A1, Canada",
     "Questions? Just reply to this email.",
   ].join("\n");
 }
@@ -154,7 +154,7 @@ function welcomeEmailHtml(recipientName: string | null): string {
             <tr>
               <td style="color:#CFC2D6;font-size:12px;line-height:1.6;border-top:1px solid #2A2A35;padding-top:16px;">
                 <p style="margin:0 0 4px;">LootLockers &mdash; snacks made simple.</p>
-                <p style="margin:0 0 4px;">[SCHOOL/MAILING ADDRESS]</p>
+                <p style="margin:0 0 4px;">Sullivan Heights Secondary School, 6248-144 Street, Surrey, BC V3X 1A1, Canada</p>
                 <p style="margin:0;">Questions? Just reply to this email.</p>
               </td>
             </tr>
