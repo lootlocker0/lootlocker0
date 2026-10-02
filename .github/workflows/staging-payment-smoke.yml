@@ -1,0 +1,62 @@
+name: Staging Payment Smoke
+
+# Payment-processing smoke test — places a real cash order and a real card
+# order, forges a signed Stripe webhook, confirms the receipt flips to PAID,
+# then refunds it — all against a STAGING deployment, never production.
+#
+# ── Why this is workflow_dispatch ONLY, with no schedule ───────────────────
+# As of writing, this Vercel project's Preview deployments share the exact
+# same DATABASE_URL and STRIPE_SECRET_KEY as Production (every sensitive env
+# var is scoped to target: ["production", "preview"] with one shared value —
+# checked directly against the project's env var list, not assumed). There is
+# no real staging environment yet. Running this workflow today, against any
+# URL that resolves to this project's current preview deployments, writes to
+# the real production database.
+#
+# DO NOT add a `schedule:` trigger here, and do not set STAGING_SITE_URL to
+# a *.vercel.app preview URL of this project, until:
+#   1. A staging deployment exists with its OWN disposable Postgres database
+#      (a separate DATABASE_URL/DIRECT_URL, not inherited from production).
+#   2. That deployment's STRIPE_SECRET_KEY is a real sk_test_... key (or the
+#      "placeholder" simulator), never production's live key.
+# tests/smoke/staging-env.ts refuses to run without STAGING_SITE_URL set at
+# all, and tests/smoke/staging-payment.test.ts's first assertion after
+# checkout refuses to continue if the returned PaymentIntent id isn't
+# `pi_sim_...` — but neither of those catches "staging and production share
+# a database," only "staging and production share a Stripe key." The
+# database separation has to be real infrastructure, not a check in code.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  staging-payment:
+    runs-on: ubuntu-latest
+    env:
+      STAGING_SITE_URL: ${{ vars.STAGING_SITE_URL }}
+      STAGING_STRIPE_WEBHOOK_SECRET: ${{ secrets.STAGING_STRIPE_WEBHOOK_SECRET }}
+      STAGING_ADMIN_PASSCODE: ${{ secrets.STAGING_ADMIN_PASSCODE }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Staging payment smoke
+        run: npm run test:staging-payment
+
+      - name: Generate Allure report
+        if: always()
+        run: npx allure generate allure-results --clean -o allure-report
+
+      - name: Upload Allure report as a workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-staging-payment
+          path: allure-report/
+          retention-days: 30

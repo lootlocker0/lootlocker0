@@ -11,6 +11,11 @@ import AllureReporter from "allure-vitest/reporter";
  * (`tests/smoke/env.ts`'s `PROD_SITE_URL`) and is read-only by construction
  * — see the comment at the top of `tests/smoke/production.test.ts` for why
  * that is a hard rule here and not just a convention.
+ *
+ * `tests/smoke/staging-payment.test.ts` is explicitly excluded below: it
+ * writes real orders and moves a simulated payment, which is only safe
+ * against a disposable staging database (vitest.staging-payment.config.ts),
+ * never swept up into this read-only production run by a loose glob.
  */
 export default defineConfig({
   resolve: {
@@ -22,6 +27,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["tests/smoke/**/*.test.ts"],
+    exclude: ["tests/smoke/staging-payment.test.ts", "**/node_modules/**"],
     testTimeout: 30_000,
     reporters: [
       "default",
