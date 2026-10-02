@@ -6,12 +6,15 @@ import { ShardButton } from "@/components/ui/ShardButton";
 import { adminFetch, type AdminResult } from "./adminApi";
 import { PickList } from "./PickList";
 import { StockAdjuster } from "./StockAdjuster";
+import { TransactionsList } from "./TransactionsList";
 import type { AdminOrdersResponse } from "./types";
 
 type OrdersState =
   | { status: "loading" }
   | { status: "error"; message: string }
   | { status: "ready"; data: AdminOrdersResponse };
+
+type AdminView = "orders" | "ledger" | "transactions";
 
 // docs/API-CONTRACT.md §6a: PENDING is excluded by default because a
 // printed sheet containing an unpaid card order is a bag handed to a
@@ -44,6 +47,7 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
   const router = useRouter();
   const [date, setDate] = useState("");
   const [showPending, setShowPending] = useState(false);
+  const [activeView, setActiveView] = useState<AdminView>("orders");
   const [state, setState] = useState<OrdersState>({ status: "loading" });
   const [signingOut, setSigningOut] = useState(false);
 
@@ -133,30 +137,34 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
           LootLockers Staff
         </h1>
         <div className="flex flex-wrap items-center gap-3">
-          <label className="flex items-center gap-2 font-mono text-xs uppercase text-text-dim">
-            Date
-            <input
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              aria-label="Service date"
-              className="border-2 border-white/10 bg-surface-2 px-2 py-1 text-text focus:border-brand"
-            />
-          </label>
-          <label className="flex items-center gap-2 font-mono text-xs uppercase text-text-dim">
-            <input
-              type="checkbox"
-              checked={showPending}
-              onChange={(e) => setShowPending(e.target.checked)}
-            />
-            Show unpaid (pending)
-          </label>
-          <ShardButton size="sm" intent="ghost" onClick={load}>
-            Refresh
-          </ShardButton>
-          <ShardButton size="sm" intent="ghost" onClick={() => window.print()}>
-            Print pick list
-          </ShardButton>
+          {activeView === "orders" && (
+            <>
+              <label className="flex items-center gap-2 font-mono text-xs uppercase text-text-dim">
+                Date
+                <input
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  aria-label="Service date"
+                  className="border-2 border-white/10 bg-surface-2 px-2 py-1 text-text focus:border-brand"
+                />
+              </label>
+              <label className="flex items-center gap-2 font-mono text-xs uppercase text-text-dim">
+                <input
+                  type="checkbox"
+                  checked={showPending}
+                  onChange={(e) => setShowPending(e.target.checked)}
+                />
+                Show unpaid (pending)
+              </label>
+              <ShardButton size="sm" intent="ghost" onClick={load}>
+                Refresh
+              </ShardButton>
+              <ShardButton size="sm" intent="ghost" onClick={() => window.print()}>
+                Print pick list
+              </ShardButton>
+            </>
+          )}
           <ShardButton size="sm" intent="ghost" loading={signingOut} onClick={signOut}>
             Sign out
           </ShardButton>
@@ -166,13 +174,42 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
       <div className="flex flex-col lg:flex-row">
         <aside className="admin-no-print border-b border-white/10 bg-surface-2 px-4 py-4 lg:min-h-[calc(100vh-81px)] lg:w-64 lg:border-b-0 lg:border-r lg:px-6 lg:py-8">
           <nav aria-label="Staff tools" className="flex gap-2 lg:flex-col">
-            <a
-              href="/admin"
-              aria-current="page"
-              className="border-2 border-brand bg-brand/10 px-3 py-2 font-mono text-xs uppercase text-brand"
+            <button
+              type="button"
+              aria-current={activeView === "orders" ? "page" : undefined}
+              onClick={() => setActiveView("orders")}
+              className={`border-2 px-3 py-2 text-left font-mono text-xs uppercase transition-colors ${
+                activeView === "orders"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-white/10 text-text-dim hover:border-brand hover:text-brand"
+              }`}
             >
               Orders
-            </a>
+            </button>
+            <button
+              type="button"
+              aria-current={activeView === "ledger" ? "page" : undefined}
+              onClick={() => setActiveView("ledger")}
+              className={`border-2 px-3 py-2 text-left font-mono text-xs uppercase transition-colors ${
+                activeView === "ledger"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-white/10 text-text-dim hover:border-brand hover:text-brand"
+              }`}
+            >
+              Stock ledger
+            </button>
+            <button
+              type="button"
+              aria-current={activeView === "transactions" ? "page" : undefined}
+              onClick={() => setActiveView("transactions")}
+              className={`border-2 px-3 py-2 text-left font-mono text-xs uppercase transition-colors ${
+                activeView === "transactions"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-white/10 text-text-dim hover:border-brand hover:text-brand"
+              }`}
+            >
+              Transactions
+            </button>
             <a
               href="/inventory"
               className="border-2 border-white/10 px-3 py-2 font-mono text-xs uppercase text-text-dim transition-colors hover:border-brand hover:text-brand"
@@ -183,7 +220,9 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
         </aside>
 
         <main className="min-w-0 flex-1 px-4 py-8 sm:px-8">
-        {state.status === "loading" && (
+        {activeView === "transactions" ? (
+          <TransactionsList onUnauthorized={onUnauthorized} />
+        ) : state.status === "loading" && (
           <p role="status" className="text-text-dim">
             Loading orders…
           </p>
@@ -203,11 +242,13 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
 
         {state.status === "ready" && (
           <>
-            <PickList data={state.data} onOrderChanged={load} onUnauthorized={onUnauthorized} />
-
-            <section id="stock-adjustment" className="admin-no-print mt-12 border-t border-white/10 pt-8">
-              <StockAdjuster ordersData={state.data} onUnauthorized={onUnauthorized} />
-            </section>
+            {activeView === "orders" ? (
+              <PickList data={state.data} onOrderChanged={load} onUnauthorized={onUnauthorized} />
+            ) : (
+              <section id="stock-ledger" className="admin-no-print">
+                <StockAdjuster ordersData={state.data} onUnauthorized={onUnauthorized} />
+              </section>
+            )}
           </>
         )}
         </main>

@@ -250,7 +250,31 @@ export const adminStockAdjustSchema = z.object({
     .refine((n) => Math.abs(n) <= 10_000, {
       message: "Adjustment is too large",
     }),
-  // No `reason` field. See the note in adminRefundSchema.
+  type: z.enum(["PURCHASE", "ADJUSTMENT"]).default("ADJUSTMENT"),
+  unitCostCents: z.number().int().min(0).max(2_147_483_647).optional(),
+}).superRefine((value, ctx) => {
+  if (value.type === "PURCHASE") {
+    if (value.delta <= 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delta"],
+        message: "A purchase must add stock",
+      });
+    }
+    if (value.unitCostCents === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["unitCostCents"],
+        message: "Unit cost is required for a purchase",
+      });
+    }
+  } else if (value.unitCostCents !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["unitCostCents"],
+      message: "Unit cost is only accepted for a purchase",
+    });
+  }
 });
 
 // ─────────────────────────────────────────────────────────────────────────────

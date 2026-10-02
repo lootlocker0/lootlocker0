@@ -78,7 +78,7 @@ export function StockAdjuster({
         <input
           id={`stock-delta-${productId}`}
           type="text"
-          inputMode="numeric"
+          inputMode="text"
           value={delta}
           onChange={(e) => setDelta(e.target.value)}
           placeholder="+7 or -2"

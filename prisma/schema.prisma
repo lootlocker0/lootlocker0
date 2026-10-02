@@ -65,6 +65,11 @@ enum PaymentMethod {
   CASH_AT_PICKUP
 }
 
+enum StockTransactionType {
+  PURCHASE
+  ADJUSTMENT
+}
+
 /// Order lifecycle. Every value here is referenced by the checkout transaction,
 /// the Stripe webhook handler, lib/db/release.ts or the expiry sweep.
 ///
@@ -135,6 +140,7 @@ model Product {
   updatedAt DateTime @updatedAt @map("updated_at")
 
   orderItems OrderItem[]
+  stockTransactions StockTransaction[]
 
   // Catalog read path: active + in stock, ordered by sortOrder then name.
   @@index([active, sortOrder])
@@ -290,6 +296,22 @@ model OrderItem {
   @@unique([orderId, productId])
   @@index([productId])
   @@map("order_items")
+}
+
+/// Persisted staff stock changes. Sales remain sourced from OrderItem.
+model StockTransaction {
+  id            String               @id @default(cuid())
+  productId     String               @map("product_id")
+  product       Product              @relation(fields: [productId], references: [id], onDelete: Restrict)
+  type          StockTransactionType
+  qtyDelta      Int                  @map("qty_delta")
+  unitCostCents Int?                 @map("unit_cost_cents")
+  stockQtyAfter Int                  @map("stock_qty_after")
+  sessionId     String?              @map("session_id")
+  createdAt     DateTime             @default(now()) @map("created_at")
+
+  @@index([productId, createdAt])
+  @@map("stock_transactions")
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
