@@ -277,6 +277,14 @@ export const adminStockAdjustSchema = z.object({
   }
 });
 
+export const adminRecordSaleSchema = z
+  .object({
+    productId: z.cuid(),
+    qty: z.number().int().min(1).max(10_000),
+    saleTotalCents: z.number().int().min(0).max(2_147_483_647),
+  })
+  .strict();
+
 // ─────────────────────────────────────────────────────────────────────────────
 // P4b — restricted inventory editor (app/api/inventory/**)
 // ─────────────────────────────────────────────────────────────────────────────

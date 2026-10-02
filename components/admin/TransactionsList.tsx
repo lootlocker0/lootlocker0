@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { ShardButton } from "@/components/ui/ShardButton";
 import { formatCents } from "@/lib/money";
 import { adminFetch } from "./adminApi";
+import { ManualSaleForm } from "./ManualSaleForm";
 
 type TransactionSource = "PURCHASE" | "ADJUSTMENT" | "SALE";
 type TransactionFilter = "ALL" | TransactionSource;
@@ -16,6 +17,7 @@ type Transaction = {
   direction: "IN" | "OUT";
   qtyDelta: number;
   unitCostCents: number | null;
+  saleTotalCents: number | null;
   stockQtyAfter: number | null;
   orderNumber: string | null;
   orderStatus: string | null;
@@ -97,6 +99,8 @@ export function TransactionsList({ onUnauthorized }: { onUnauthorized: () => voi
         </ShardButton>
       </div>
 
+      <ManualSaleForm onUnauthorized={onUnauthorized} onRecorded={refresh} />
+
       <div className="my-4 flex flex-wrap gap-2" role="group" aria-label="Filter transactions">
         {FILTERS.map((option) => (
           <button
@@ -141,7 +145,7 @@ export function TransactionsList({ onUnauthorized }: { onUnauthorized: () => voi
                     <th className="border-b border-white/10 px-3 py-3">Product</th>
                     <th className="border-b border-white/10 px-3 py-3">Type</th>
                     <th className="border-b border-white/10 px-3 py-3">Quantity</th>
-                    <th className="border-b border-white/10 px-3 py-3">Unit cost</th>
+                    <th className="border-b border-white/10 px-3 py-3">Amount</th>
                     <th className="border-b border-white/10 px-3 py-3">Stock after</th>
                     <th className="border-b border-white/10 px-3 py-3">Order</th>
                   </tr>
@@ -164,7 +168,11 @@ export function TransactionsList({ onUnauthorized }: { onUnauthorized: () => voi
                         {entry.direction === "IN" ? "+" : "−"}{Math.abs(entry.qtyDelta)}
                       </td>
                       <td className="border-b border-white/5 px-3 py-3 text-text-dim">
-                        {entry.unitCostCents === null ? "—" : formatCents(entry.unitCostCents)}
+                        {entry.source === "PURCHASE"
+                          ? entry.unitCostCents === null ? "—" : `Unit ${formatCents(entry.unitCostCents)}`
+                          : entry.source === "SALE"
+                            ? entry.saleTotalCents === null ? "—" : formatCents(entry.saleTotalCents)
+                            : "—"}
                       </td>
                       <td className="border-b border-white/5 px-3 py-3 text-text-dim">
                         {entry.stockQtyAfter ?? "—"}

@@ -32,6 +32,7 @@ type StockHistoryEntry = {
   direction: "IN" | "OUT";
   qtyDelta: number;
   unitCostCents: number | null;
+  saleTotalCents: number | null;
   stockQtyAfter: number | null;
   orderNumber: string | null;
   orderStatus: string | null;
@@ -111,8 +112,8 @@ export function StockAdjuster({
     <div>
       <h2 className="font-display text-headline-lg uppercase text-text">Stock ledger</h2>
       <p className="mt-2 max-w-2xl text-sm text-text-dim">
-        Record supplier purchases and physical stock corrections, then inspect the latest purchases,
-        sales, and quantity changes for each product.
+        Sales are recorded from orders. Use Add or Remove for manual stock changes; supplier purchases
+        only add stock.
       </p>
       <p className="mt-3 max-w-2xl border-l-2 border-brand pl-3 text-xs text-text-faint">
         Corrections must match the physical shelf count. Failed or expired card orders release their
@@ -149,7 +150,8 @@ function StockRow({
   row: AdjustRow;
   onUnauthorized: () => void;
 }) {
-  const [delta, setDelta] = useState("");
+  const [adjustmentQty, setAdjustmentQty] = useState("");
+  const [adjustmentDirection, setAdjustmentDirection] = useState<1 | -1>(1);
   const [purchaseQty, setPurchaseQty] = useState("");
   const [unitCostCents, setUnitCostCents] = useState("");
   const [busy, setBusy] = useState(false);
@@ -197,13 +199,13 @@ function StockRow({
 
   async function applyAdjustment(event: React.FormEvent) {
     event.preventDefault();
-    const value = delta.trim();
+    const value = adjustmentQty.trim();
     const quantity = Number(value);
-    if (value === "" || !Number.isSafeInteger(quantity) || quantity === 0) {
-      setError({ code: "INVALID_INPUT", message: "Enter a non-zero whole number, e.g. +7 or -2." });
+    if (value === "" || !Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 10_000) {
+      setError({ code: "INVALID_INPUT", message: "Enter a whole quantity from 1 to 10,000." });
       return;
     }
-    if (await saveStock({ delta: quantity })) setDelta("");
+    if (await saveStock({ delta: adjustmentDirection * quantity })) setAdjustmentQty("");
   }
 
   async function applyPurchase(event: React.FormEvent) {
@@ -267,24 +269,49 @@ function StockRow({
 
       <div className="mt-3 grid gap-3 xl:grid-cols-2">
         <form onSubmit={applyAdjustment} className="flex flex-wrap items-end gap-2 border-t border-white/10 pt-3">
-          <p className="w-full font-mono text-[11px] uppercase text-text-dim">Physical adjustment</p>
+          <p className="w-full font-mono text-[11px] uppercase text-text-dim">Stock change</p>
+          <div className="flex h-9" role="group" aria-label={`Stock change direction for ${row.name}`}>
+            <button
+              type="button"
+              aria-pressed={adjustmentDirection === 1}
+              onClick={() => setAdjustmentDirection(1)}
+              className={`border-2 px-3 font-mono text-xs uppercase ${adjustmentDirection === 1 ? "border-brand bg-brand/10 text-brand" : "border-white/10 text-text-dim hover:border-brand"}`}
+            >
+              + Add
+            </button>
+            <button
+              type="button"
+              aria-pressed={adjustmentDirection === -1}
+              onClick={() => setAdjustmentDirection(-1)}
+              className={`border-2 border-l-0 px-3 font-mono text-xs uppercase ${adjustmentDirection === -1 ? "border-brand bg-brand/10 text-brand" : "border-white/10 text-text-dim hover:border-brand"}`}
+            >
+              − Remove
+            </button>
+          </div>
           <label className="flex flex-col gap-1 font-mono text-[10px] uppercase text-text-faint">
-            Signed quantity
+            Quantity
             <input
-              type="text"
-              inputMode="text"
-              value={delta}
-              onChange={(event) => setDelta(event.target.value)}
-              placeholder="+7 or -2"
-              aria-label={`Stock delta for ${row.name}`}
+              type="number"
+              inputMode="numeric"
+              min="1"
+              max="10000"
+              step="1"
+              value={adjustmentQty}
+              onChange={(event) => setAdjustmentQty(event.target.value)}
+              aria-label={`Quantity to ${adjustmentDirection === 1 ? "add to" : "remove from"} ${row.name}`}
               className="w-28 border-2 border-white/10 bg-surface-3 px-2 py-1 text-sm text-text focus:border-brand"
             />
           </label>
-          <ShardButton type="submit" size="sm" loading={busy}>Apply correction</ShardButton>
+          <ShardButton type="submit" size="sm" loading={busy}>
+            {adjustmentDirection === 1 ? "Add stock" : "Deduct stock"}
+          </ShardButton>
         </form>
 
         <form onSubmit={applyPurchase} className="flex flex-wrap items-end gap-2 border-t border-white/10 pt-3">
           <p className="w-full font-mono text-[11px] uppercase text-text-dim">Supplier purchase</p>
+          <p className="w-full -mt-1 text-xs text-text-faint">
+            Purchases only add stock. Choose Remove above to deduct a quantity.
+          </p>
           <label className="flex flex-col gap-1 font-mono text-[10px] uppercase text-text-faint">
             Quantity
             <input
@@ -349,7 +376,7 @@ function StockRow({
                         <th className="border-b border-white/10 px-2 py-2">When</th>
                         <th className="border-b border-white/10 px-2 py-2">Source</th>
                         <th className="border-b border-white/10 px-2 py-2">Change</th>
-                        <th className="border-b border-white/10 px-2 py-2">Unit cost</th>
+                        <th className="border-b border-white/10 px-2 py-2">Amount</th>
                         <th className="border-b border-white/10 px-2 py-2">Stock after</th>
                       </tr>
                     </thead>
@@ -370,7 +397,11 @@ function StockRow({
                             {entry.direction === "IN" ? "+" : "-"}{Math.abs(entry.qtyDelta)}
                           </td>
                           <td className="border-b border-white/5 px-2 py-2 text-text-dim">
-                            {entry.unitCostCents === null ? "—" : formatCents(entry.unitCostCents)}
+                            {entry.source === "PURCHASE"
+                              ? entry.unitCostCents === null ? "—" : `Unit ${formatCents(entry.unitCostCents)}`
+                              : entry.source === "SALE"
+                                ? entry.saleTotalCents === null ? "—" : formatCents(entry.saleTotalCents)
+                                : "—"}
                           </td>
                           <td className="border-b border-white/5 px-2 py-2 text-text-dim">
                             {entry.stockQtyAfter ?? "—"}

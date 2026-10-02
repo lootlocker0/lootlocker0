@@ -334,6 +334,48 @@ describe("P4 stock ledger — stock and audit row commit together", () => {
     expect(JSON.stringify(globalBody)).not.toContain("email");
   });
 
+  it("records manual sales and deducts exactly the sold quantity", async () => {
+    const admin = await adminCookie();
+    const product = await seedProduct({ stockQty: 12 });
+
+    const response = await adminPost("/api/admin/sales", admin, {
+      productId: product.id,
+      qty: 2,
+      saleTotalCents: 475,
+    });
+    expect(response.status, response.text).toBe(201);
+    expect(response.body).toMatchObject({
+      productId: product.id,
+      qty: 2,
+      saleTotalCents: 475,
+      stockQty: 10,
+    });
+    expect(
+      (await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty,
+    ).toBe(10);
+
+    const ledgerEntry = await testDb.stockTransaction.findUniqueOrThrow({
+      where: { id: response.body.transactionId },
+    });
+    expect(ledgerEntry).toMatchObject({
+      type: "SALE",
+      qtyDelta: -2,
+      saleTotalCents: 475,
+      stockQtyAfter: 10,
+    });
+
+    const oversell = await adminPost("/api/admin/sales", admin, {
+      productId: product.id,
+      qty: 11,
+      saleTotalCents: 2_000,
+    });
+    expect(oversell.status, oversell.text).toBe(409);
+    expect(
+      (await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty,
+    ).toBe(10);
+    expect(await testDb.stockTransaction.count({ where: { productId: product.id } })).toBe(1);
+  });
+
   it("rolls back the stock change when the ledger insert fails", async () => {
     const admin = await adminCookie();
     const product = await seedProduct({ stockQty: 12 });

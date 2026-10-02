@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { adminStockAdjustSchema, inventoryStockAdjustSchema } from "@/lib/validation";
+import {
+  adminRecordSaleSchema,
+  adminStockAdjustSchema,
+  inventoryStockAdjustSchema,
+} from "@/lib/validation";
 
 describe("adminStockAdjustSchema", () => {
   it("keeps existing deltas as adjustments by default", () => {
@@ -32,5 +36,28 @@ describe("adminStockAdjustSchema", () => {
     [{ delta: 1, type: "ADJUSTMENT", unitCostCents: 100 }],
   ])("rejects invalid purchase/cost combinations: %o", (payload) => {
     expect(adminStockAdjustSchema.safeParse(payload).success).toBe(false);
+  });
+});
+
+describe("adminRecordSaleSchema", () => {
+  const sale = {
+    productId: "cmtlfpsen0001v57dkjtmrxpf",
+    qty: 2,
+    saleTotalCents: 475,
+  };
+
+  it("accepts a positive sold quantity and integer-cent sale total", () => {
+    expect(adminRecordSaleSchema.safeParse(sale).success).toBe(true);
+  });
+
+  it.each([
+    [{ ...sale, qty: 0 }],
+    [{ ...sale, qty: -2 }],
+    [{ ...sale, qty: 1.5 }],
+    [{ ...sale, saleTotalCents: -1 }],
+    [{ ...sale, saleTotalCents: 1.5 }],
+    [{ ...sale, delta: 5 }],
+  ])("rejects invalid or inventory-changing sale inputs: %o", (payload) => {
+    expect(adminRecordSaleSchema.safeParse(payload).success).toBe(false);
   });
 });

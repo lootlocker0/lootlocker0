@@ -1494,19 +1494,46 @@ for what an order did.**
 
 ---
 
+### `POST /api/admin/sales`
+
+Record a manual sale. This endpoint only accepts a product, positive quantity
+sold, and total sale amount in integer cents. It atomically subtracts the
+quantity from stock using `adjust_stock()` and stores a `SALE` ledger row in the
+same transaction. It cannot increase stock or accept an adjustment delta.
+
+**Request**
+
+```json
+{
+  "productId": "cmtlfpsen0001v57dkjtmrxpf",
+  "qty": 2,
+  "saleTotalCents": 475
+}
+```
+
+**Response 201** — includes `transactionId`, `productId`, `productName`, `qty`,
+`saleTotalCents`, and authoritative `stockQty` after the sale.
+
+**Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400,
+`PRODUCT_UNAVAILABLE` 409, `STOCK_ADJUSTMENT_REJECTED` 409 when available stock
+is less than the quantity sold, `INTERNAL` 500.
+
+---
+
 ### `GET /api/admin/transactions`
 
 Returns the latest transactions across all products, newest first. The response
-merges persisted supplier purchases and adjustments with order-line sales and
+merges persisted supplier purchases, adjustments, manual sales, and order-line sales and
 requires the staff admin session. It is not available through the restricted
 `/api/inventory/*` role.
 
 **Request** — optional `take` query parameter, integer 1–500, default 100.
 
 **Response 200** — same transaction fields as the product-specific timeline,
-with `productId` and `productName` on each entry. Student fields are never
-selected; sale rows include only order number and status. Pending, canceled, and
-expired orders are excluded. `hasMore` indicates older records are available.
+with `productId`, `productName`, and `saleTotalCents` on each entry. Student
+fields are never selected; order-sale rows include only order number and status.
+Pending, canceled, and expired orders are excluded. `hasMore` indicates older
+records are available.
 
 **Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400 for an invalid
 `take`, `INTERNAL` 500.
@@ -1515,8 +1542,8 @@ expired orders are excluded. `hasMore` indicates older records are available.
 
 ### `GET /api/admin/products/[productId]/transactions`
 
-Returns a newest-first product timeline by merging persisted supplier purchases
-and adjustments with order-line sales. Requires the staff admin session; it is
+Returns a newest-first product timeline by merging persisted supplier purchases,
+adjustments, manual sales, and order-line sales. Requires the staff admin session; it is
 not available through the restricted `/api/inventory/*` role.
 
 **Request** — optional `take` query parameter, integer 1–500, default 100.
@@ -1543,10 +1570,11 @@ not available through the restricted `/api/inventory/*` role.
 }
 ```
 
-Order rows use `source: "SALE"`, a negative `qtyDelta`, and include only the
-order number and status; student fields are never selected. Canceled, expired,
-and pending orders are excluded. `stockQtyAfter` and `unitCostCents` are null
-for order rows because order-item snapshots do not store those values.
+Sale rows use `source: "SALE"`, a negative `qtyDelta`, and expose
+`saleTotalCents`. Order-sale rows include only the order number and status;
+student fields are never selected. Canceled, expired, and pending orders are
+excluded. `stockQtyAfter` and `unitCostCents` are null for order rows because
+order-item snapshots do not store those values.
 
 **Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400 for an invalid
 `take`, `PRODUCT_UNAVAILABLE` 409, `INTERNAL` 500.
@@ -1941,6 +1969,7 @@ Planned, in build order (shipped rows marked):
 | P4 | `POST /api/admin/orders/[orderNumber]/cash` | Record cash collected on a `CASH_AT_PICKUP` order | **Shipped** — §6a |
 | P4 | `POST /api/admin/orders/[orderNumber]/refund` | Manual refund, amount always recomputed from the order | **Shipped** — §6a |
 | P4 | `POST /api/admin/products/[productId]/stock` | Atomic purchase/correction and persisted stock transaction | **Shipped** — §6a |
+| P4 | `POST /api/admin/sales` | Record units sold, sale amount, and deduct stock atomically | **Shipped** — §6a |
 | P4 | `GET /api/admin/transactions` | Combined latest transactions across products | **Shipped** — §6a |
 | P4 | `GET /api/admin/products/[productId]/transactions` | Combined stock-change and order-line timeline | **Shipped** — §6a |
 | P4b | `POST /api/inventory/login` · `POST /api/inventory/logout` · `GET /api/inventory/session` | Inventory-editor sign-in on its own passcode and its own secret | **Shipped** — §6b |

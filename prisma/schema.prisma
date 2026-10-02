@@ -68,6 +68,7 @@ enum PaymentMethod {
 enum StockTransactionType {
   PURCHASE
   ADJUSTMENT
+  SALE
 }
 
 /// Order lifecycle. Every value here is referenced by the checkout transaction,
@@ -298,7 +299,8 @@ model OrderItem {
   @@map("order_items")
 }
 
-/// Persisted staff stock changes. Sales remain sourced from OrderItem.
+/// Persisted staff stock changes and manual sales. Online order sales remain
+/// sourced from OrderItem.
 model StockTransaction {
   id            String               @id @default(cuid())
   productId     String               @map("product_id")
@@ -306,6 +308,7 @@ model StockTransaction {
   type          StockTransactionType
   qtyDelta      Int                  @map("qty_delta")
   unitCostCents Int?                 @map("unit_cost_cents")
+  saleTotalCents Int?                @map("sale_total_cents")
   stockQtyAfter Int                  @map("stock_qty_after")
   sessionId     String?              @map("session_id")
   createdAt     DateTime             @default(now()) @map("created_at")
