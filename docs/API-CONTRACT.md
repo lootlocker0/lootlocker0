@@ -14,17 +14,17 @@ commit. No exceptions, including "temporary" internal routes.
 **Status:** P3 complete (checkout, Stripe webhook, expiry sweep, confirmation
 read) and **P4 backend complete** (staff admin). `GET /api/products`,
 `GET /api/slots`, `POST /api/checkout`, `POST /api/webhooks/stripe`,
-`GET /api/orders/[orderNumber]`, `GET /api/cron/sweep` and the eight
+`GET /api/orders/[orderNumber]`, `GET /api/cron/sweep` and the
 `/api/admin/*` routes are live and documented in §6. **The `/admin` screen is
 unblocked.** The sections below define the conventions every endpoint follows,
 plus the data types and enum values fixed by the database. Later phases append
 to §6 without restructuring anything above it.
 
-> **P4 deployment step, do not skip.** `POST /api/admin/products/[productId]/stock`
-> calls a new SQL function, `adjust_stock`. Re-run
+> **P4 deployment step, do not skip.** Apply Prisma migrations with
+> `npx prisma migrate deploy`, then re-run
 > `psql "$DATABASE_URL" -f prisma/migrations/manual_constraints.sql` against
 > every database — dev, CI, `looplockers_test`, production — or that one route
-> 500s. There is no Prisma migration; the file is idempotent (§5).
+> 500s. The SQL constraints file is idempotent (§5).
 
 ---
 
@@ -1417,18 +1417,21 @@ exactly one seat decrement.
 
 ### `POST /api/admin/products/[productId]/stock`
 
-Manual stock correction: a delivery arrived, a box was miscounted, something got
-dropped.
+Record a supplier purchase or manual stock correction. The relative delta is
+applied by `adjust_stock()` and its `StockTransaction` record is committed in
+the same database transaction.
 
 **Request**
 
 ```json
-{ "delta": -3 }
+{ "delta": 5, "type": "PURCHASE", "unitCostCents": 125 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
 | `delta` | int | **Signed and relative.** Non-zero, \|delta\| ≤ 10000 |
+| `type` | `PURCHASE` \| `ADJUSTMENT` | Optional; defaults to `ADJUSTMENT` |
+| `unitCostCents` | non-negative int | Required for `PURCHASE`, which requires positive `delta`; rejected for `ADJUSTMENT` |
 
 **There is no absolute "set stock to N", and that is a correctness requirement,
 not an interface preference.** "Set stock to 7" is a read-then-write with a
@@ -1451,11 +1454,14 @@ discovered.
 
 ```json
 {
+  "transactionId": "cmtlfpsen0001v57dkjtmrxpf",
   "productId": "cmtlfpsen0001v57dkjtmrxpf",
   "name": "Sour Rainbow Belts",
-  "stockQty": 31,
-  "delta": -3,
-  "previousStockQty": 34,
+  "stockQty": 36,
+  "delta": 5,
+  "type": "PURCHASE",
+  "unitCostCents": 125,
+  "previousStockQty": 31,
   "active": true,
   "allergens": ["SULPHITES"]
 }
@@ -1466,11 +1472,14 @@ so it already includes any concurrent checkout that landed first. It will
 sometimes not equal what the staff member expected, and that is the point; show
 the number, not their arithmetic.
 
+The stock update and audit row are all-or-nothing. Purchase unit cost is
+supplier cost in integer cents, not the product's catalog sale price.
+
 **Errors**
 
 | `code` | HTTP | Cause |
 |---|---|---|
-| `INVALID_INPUT` | 400 | `delta` missing, zero, fractional, or out of range |
+| `INVALID_INPUT` | 400 | Invalid delta/type/cost combination or out-of-range value |
 | `ADMIN_UNAUTHORIZED` | 401 | No staff session |
 | `PRODUCT_UNAVAILABLE` | 409 | No such product, or a malformed id |
 | `STOCK_ADJUSTMENT_REJECTED` | 409 | Would leave a negative quantity. Carries `productId`, the current `stockQty` and the `delta` |
@@ -1484,6 +1493,91 @@ in the database prevents it. **Adjust for what is physically on the shelf, not
 for what an order did.**
 
 ---
+
+### `POST /api/admin/sales`
+
+Record a manual sale. This endpoint only accepts a product, positive quantity
+sold, and total sale amount in integer cents. It atomically subtracts the
+quantity from stock using `adjust_stock()` and stores a `SALE` ledger row in the
+same transaction. It cannot increase stock or accept an adjustment delta.
+
+**Request**
+
+```json
+{
+  "productId": "cmtlfpsen0001v57dkjtmrxpf",
+  "qty": 2,
+  "saleTotalCents": 475
+}
+```
+
+**Response 201** — includes `transactionId`, `productId`, `productName`, `qty`,
+`saleTotalCents`, and authoritative `stockQty` after the sale.
+
+**Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400,
+`PRODUCT_UNAVAILABLE` 409, `STOCK_ADJUSTMENT_REJECTED` 409 when available stock
+is less than the quantity sold, `INTERNAL` 500.
+
+---
+
+### `GET /api/admin/transactions`
+
+Returns the latest transactions across all products, newest first. The response
+merges persisted supplier purchases, adjustments, manual sales, and order-line sales and
+requires the staff admin session. It is not available through the restricted
+`/api/inventory/*` role.
+
+**Request** — optional `take` query parameter, integer 1–500, default 100.
+
+**Response 200** — same transaction fields as the product-specific timeline,
+with `productId`, `productName`, and `saleTotalCents` on each entry. Student
+fields are never selected; order-sale rows include only order number and status.
+Pending, canceled, and expired orders are excluded. `hasMore` indicates older
+records are available.
+
+**Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400 for an invalid
+`take`, `INTERNAL` 500.
+
+---
+
+### `GET /api/admin/products/[productId]/transactions`
+
+Returns a newest-first product timeline by merging persisted supplier purchases,
+adjustments, manual sales, and order-line sales. Requires the staff admin session; it is
+not available through the restricted `/api/inventory/*` role.
+
+**Request** — optional `take` query parameter, integer 1–500, default 100.
+
+**Response 200**
+
+```json
+{
+  "productId": "cmtlfpsen0001v57dkjtmrxpf",
+  "transactions": [
+    {
+      "id": "cmtlfpsen0001v57dkjtmrxpf",
+      "source": "PURCHASE",
+      "direction": "IN",
+      "qtyDelta": 5,
+      "unitCostCents": 125,
+      "stockQtyAfter": 36,
+      "orderNumber": null,
+      "orderStatus": null,
+      "createdAt": "2026-10-01T16:00:00.000Z"
+    }
+  ],
+  "hasMore": false
+}
+```
+
+Sale rows use `source: "SALE"`, a negative `qtyDelta`, and expose
+`saleTotalCents`. Order-sale rows include only the order number and status;
+student fields are never selected. Canceled, expired, and pending orders are
+excluded. `stockQtyAfter` and `unitCostCents` are null for order rows because
+order-item snapshots do not store those values.
+
+**Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400 for an invalid
+`take`, `PRODUCT_UNAVAILABLE` 409, `INTERNAL` 500.
 
 ## 6b. Restricted inventory editor (P4b) — `/api/inventory/*`
 
@@ -1890,7 +1984,10 @@ Planned, in build order (shipped rows marked):
 | P4 | `POST /api/admin/orders/[orderNumber]/pickup` | Mark picked up, pickup code verified | **Shipped** — §6a |
 | P4 | `POST /api/admin/orders/[orderNumber]/cash` | Record cash collected on a `CASH_AT_PICKUP` order | **Shipped** — §6a |
 | P4 | `POST /api/admin/orders/[orderNumber]/refund` | Manual refund, amount always recomputed from the order | **Shipped** — §6a |
-| P4 | `POST /api/admin/products/[productId]/stock` | Atomic relative stock adjustment | **Shipped** — §6a |
+| P4 | `POST /api/admin/products/[productId]/stock` | Atomic purchase/correction and persisted stock transaction | **Shipped** — §6a |
+| P4 | `POST /api/admin/sales` | Record units sold, sale amount, and deduct stock atomically | **Shipped** — §6a |
+| P4 | `GET /api/admin/transactions` | Combined latest transactions across products | **Shipped** — §6a |
+| P4 | `GET /api/admin/products/[productId]/transactions` | Combined stock-change and order-line timeline | **Shipped** — §6a |
 | P4b | `POST /api/inventory/login` · `POST /api/inventory/logout` · `GET /api/inventory/session` | Inventory-editor sign-in on its own passcode and its own secret | **Shipped** — §6b |
 | P4b | `GET /api/inventory/products` | Every product, active and inactive, every stock level | **Shipped** — §6b |
 | P4b | `POST /api/inventory/products` | Create a product. Allergens mandatory and affirmed | **Shipped** — §6b |

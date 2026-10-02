@@ -250,8 +250,40 @@ export const adminStockAdjustSchema = z.object({
     .refine((n) => Math.abs(n) <= 10_000, {
       message: "Adjustment is too large",
     }),
-  // No `reason` field. See the note in adminRefundSchema.
+  type: z.enum(["PURCHASE", "ADJUSTMENT"]).default("ADJUSTMENT"),
+  unitCostCents: z.number().int().min(0).max(2_147_483_647).optional(),
+}).superRefine((value, ctx) => {
+  if (value.type === "PURCHASE") {
+    if (value.delta <= 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delta"],
+        message: "A purchase must add stock",
+      });
+    }
+    if (value.unitCostCents === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["unitCostCents"],
+        message: "Unit cost is required for a purchase",
+      });
+    }
+  } else if (value.unitCostCents !== undefined) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["unitCostCents"],
+      message: "Unit cost is only accepted for a purchase",
+    });
+  }
 });
+
+export const adminRecordSaleSchema = z
+  .object({
+    productId: z.cuid(),
+    qty: z.number().int().min(1).max(10_000),
+    saleTotalCents: z.number().int().min(0).max(2_147_483_647),
+  })
+  .strict();
 
 // ─────────────────────────────────────────────────────────────────────────────
 // P4b — restricted inventory editor (app/api/inventory/**)
@@ -341,10 +373,14 @@ const productSortOrder = z.number().int().min(0).max(9_999);
 /// value that slips a third-party URL past a naive "starts with /" check.
 ///
 /// This field itself validates a URL, not a file — the upload lives at
-/// `POST /api/inventory/images`, which stores the file in Vercel Blob and
-/// hands back its HTTPS URL for this field. A remote `https://` host here is
-/// also a third-party request from a student's browser, so uploaded Blob URLs
-/// are the approved remote host for this field.
+/// `POST /api/inventory/images`, which hands back the URL for this field
+/// (`lib/blob.ts`). In production that's a real Vercel Blob URL, persisted
+/// independently of any deploy; in local dev without `BLOB_READ_WRITE_TOKEN`
+/// it falls back to a site-relative path under `public/ProductImages/` for
+/// convenience. Either way this schema doesn't care which shape arrives — a
+/// remote `https://` host here is still a third-party request from a
+/// student's browser for anything NOT under Vercel Blob's own origin, so an
+/// allow-list would be the next step if that ever needs tightening.
 const productImageUrl = z
   .string()
   .trim()

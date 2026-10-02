@@ -322,7 +322,7 @@ describe("design tokens — no raw hex outside the two files allowed to hold one
    * BUILDPLAN.md's design-drift check: `grep -rE "#[0-9a-fA-F]{6}" components/`
    * should return nothing, because every colour goes through a token.
    *
-   * Three files are legitimately allowed raw hex and are excluded by name:
+   * Four files are legitimately allowed raw hex and are excluded by name:
    *   · `app/globals.css` — where the tokens are DEFINED.
    *   · `lib/rarity.ts` — the canonical rarity lookup, reproduced verbatim in
    *     CLAUDE.md §4. Its `hex` values are the token source for inline styles
@@ -334,8 +334,26 @@ describe("design tokens — no raw hex outside the two files allowed to hold one
    *     match `--color-void` by inspection (docs/HANDOFF.md #74) — this
    *     allowlist entry does not excuse it from being the *right* colour,
    *     only from being expressed as a token.
+   *   · `components/account/LockerSignIn.tsx` — its "Sign in with Google"
+   *     button. Google's branding guidelines
+   *     (https://developers.google.com/identity/branding-guidelines) fix the
+   *     official mark's border and four-path "G" logo colours exactly; like
+   *     the theme-color meta tag above, this is a fixed external brand
+   *     requirement with no app design token to route it through, not a
+   *     colour this app is free to reskin.
+   *   · `lib/email.ts` — the welcome-email HTML template. Email clients do
+   *     not support CSS custom properties (or `clip-path`, or webfonts in
+   *     most cases), so every colour here is a hand-copied hex equivalent of
+   *     the real token, inlined as `style="..."` — there is no other way to
+   *     express `app/globals.css`'s tokens inside an email body.
    */
-  const ALLOWED = new Set(["app/globals.css", "lib/rarity.ts", "app/layout.tsx"]);
+  const ALLOWED = new Set([
+    "app/globals.css",
+    "lib/rarity.ts",
+    "app/layout.tsx",
+    "components/account/LockerSignIn.tsx",
+    "lib/email.ts",
+  ]);
 
   it("no source file outside globals.css, lib/rarity.ts and layout.tsx's theme-color hardcodes a colour", () => {
     const sources = [

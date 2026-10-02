@@ -1,11 +1,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { db } from "@/lib/db";
 import { AppError, errorResponse } from "@/lib/errors";
+import { logEvent } from "@/lib/log";
+import { sendWelcomeEmail } from "@/lib/email";
 import {
   assertGoogleOAuthConfigured,
+  clearedOAuthStateCookie,
   consumeOAuthState,
   createAccountSession,
   accountUserSelect,
+  oauthStateMatchesCookie,
+  type AccountUser,
 } from "@/lib/account-auth";
 
 export const runtime = "nodejs";
@@ -32,7 +37,9 @@ function displayName(name: unknown): string | null {
   return typeof name === "string" && name.trim() ? name.trim().slice(0, 80) : null;
 }
 
-async function upsertGoogleUser(profile: GoogleProfile) {
+async function upsertGoogleUser(
+  profile: GoogleProfile,
+): Promise<{ user: AccountUser; isNewAccount: boolean }> {
   if (typeof profile.sub !== "string" || typeof profile.email !== "string" || profile.email_verified !== true) {
     throw new AppError("OAUTH_FAILED");
   }
@@ -46,29 +53,46 @@ async function upsertGoogleUser(profile: GoogleProfile) {
     // that's already set (Google's name could change; the account owner's
     // idea of their name, once recorded, isn't second-guessed by a login).
     if (!existingGoogle.name && name) {
-      return db.user.update({ where: { id: existingGoogle.id }, data: { name }, select: accountUserSelect });
+      const user = await db.user.update({ where: { id: existingGoogle.id }, data: { name }, select: accountUserSelect });
+      return { user, isNewAccount: false };
     }
-    return db.user.findUniqueOrThrow({ where: { id: existingGoogle.id }, select: accountUserSelect });
+    const user = await db.user.findUniqueOrThrow({ where: { id: existingGoogle.id }, select: accountUserSelect });
+    return { user, isNewAccount: false };
   }
 
   const existingEmail = await db.user.findUnique({ where: { email } });
   if (existingEmail) {
     if (existingEmail.googleId && existingEmail.googleId !== profile.sub) throw new AppError("OAUTH_FAILED");
-    return db.user.update({
-      where: { id: existingEmail.id },
-      data: { googleId: profile.sub, ...(!existingEmail.name && name ? { name } : {}) },
-      select: accountUserSelect,
-    });
+    // Google has already proven ownership of this email (email_verified must
+    // be true, checked above). Linking here is the moment the real owner is
+    // proven — not whoever set the original password. If an attacker had
+    // created this account with a password to squat the email, their
+    // password must stop working and their sessions must die right now, or
+    // linking a Google identity would do nothing to close their access.
+    const [updated] = await db.$transaction([
+      db.user.update({
+        where: { id: existingEmail.id },
+        data: {
+          googleId: profile.sub,
+          passwordHash: null,
+          ...(!existingEmail.name && name ? { name } : {}),
+        },
+        select: accountUserSelect,
+      }),
+      db.accountSession.deleteMany({ where: { userId: existingEmail.id } }),
+    ]);
+    return { user: updated, isNewAccount: false }; // linking, not creation
   }
 
   const base = usernameBase(email, profile.name);
   for (let suffix = 0; suffix < 10; suffix++) {
     const username = `${base}${suffix ? suffix : ""}`.slice(0, 30);
     try {
-      return await db.user.create({
+      const user = await db.user.create({
         data: { username, name, email, googleId: profile.sub },
         select: accountUserSelect,
       });
+      return { user, isNewAccount: true }; // the one true "brand new Google account" moment
     } catch (error) {
       if ((error as { code?: string })?.code !== "P2002") throw error;
     }
@@ -81,7 +105,28 @@ export async function GET(req: NextRequest) {
     assertGoogleOAuthConfigured();
     const code = req.nextUrl.searchParams.get("code");
     const state = req.nextUrl.searchParams.get("state");
-    if (!code || !state || !(await consumeOAuthState(state))) throw new AppError("OAUTH_FAILED");
+    // Cookie check first — cheap, no DB round trip, and it's the check that
+    // actually stops OAuth login CSRF (see oauthStateCookie's comment): the
+    // DB-side consumeOAuthState alone proves the value is genuine and
+    // single-use, not that THIS browser is the one /start issued it to.
+    //
+    // Logged separately (not just a single collapsed OAUTH_FAILED) because the
+    // four ways this can fail point at completely different problems — a
+    // cookie mismatch means the browser/cookie plumbing is wrong, an expired
+    // state means the user sat on Google's consent screen too long, and this
+    // is the only place that distinction is visible at all.
+    if (!code || !state) {
+      logEvent("oauth_callback_denied", { reason: "missing_code_or_state" });
+      throw new AppError("OAUTH_FAILED");
+    }
+    if (!oauthStateMatchesCookie(req, state)) {
+      logEvent("oauth_callback_denied", { reason: "state_cookie_mismatch" });
+      throw new AppError("OAUTH_FAILED");
+    }
+    if (!(await consumeOAuthState(state))) {
+      logEvent("oauth_callback_denied", { reason: "state_row_missing_or_expired" });
+      throw new AppError("OAUTH_FAILED");
+    }
 
     const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
@@ -102,12 +147,32 @@ export async function GET(req: NextRequest) {
       headers: { Authorization: `Bearer ${tokens.access_token}` },
     });
     if (!profileResponse.ok) throw new AppError("OAUTH_FAILED");
-    const user = await upsertGoogleUser((await profileResponse.json()) as GoogleProfile);
+    const { user, isNewAccount } = await upsertGoogleUser(
+      (await profileResponse.json()) as GoogleProfile,
+    );
     const cookie = await createAccountSession(user.id);
-    const response = NextResponse.redirect(new URL("/", process.env.NEXT_PUBLIC_SITE_URL ?? req.nextUrl.origin));
+    if (isNewAccount) void sendWelcomeEmail(user.email, user.name);
+    // `||`, not `??` — an env var set to an empty string is falsy but not
+    // nullish, so `??` would pass "" straight to `new URL("/", "")` and throw
+    // ERR_INVALID_URL. req.nextUrl.origin is always a valid absolute origin
+    // from the real incoming request, so it's a safe fallback either way.
+    const siteOrigin = process.env.NEXT_PUBLIC_SITE_URL || req.nextUrl.origin;
+    const response = NextResponse.redirect(new URL("/", siteOrigin));
     response.cookies.set(cookie);
+    response.cookies.set(clearedOAuthStateCookie());
     return response;
   } catch (error) {
-    return errorResponse(error);
+    // errorResponse() returns a plain Fetch Response (Response.json(...)),
+    // not a NextResponse, so it has no .cookies API to clear the state
+    // cookie on. Rebuild it as a NextResponse with the identical body/status
+    // rather than changing errorResponse()'s shared return type for every
+    // other route in the codebase.
+    const errRes = errorResponse(error);
+    const body = await errRes.json();
+    const response = NextResponse.json(body, { status: errRes.status });
+    // Single-use either way: a failed attempt must not leave a live
+    // state-bound cookie for a later request to reuse.
+    response.cookies.set(clearedOAuthStateCookie());
+    return response;
   }
 }

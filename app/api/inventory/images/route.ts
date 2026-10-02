@@ -1,8 +1,7 @@
-import { randomUUID } from "node:crypto";
-import { put } from "@vercel/blob";
 import type { NextRequest } from "next/server";
 import { requireInventorySession } from "@/lib/inventory-session";
 import { AppError, errorResponse } from "@/lib/errors";
+import { saveProductImage } from "@/lib/blob";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,13 +36,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const filename = `${randomUUID()}.${extension}`;
-    const blob = await put(`ProductImages/${filename}`, file, {
-      access: "public",
-    });
+    const imageUrl = await saveProductImage(file, extension);
 
     return Response.json(
-      { imageUrl: blob.url },
+      { imageUrl },
       { status: 201, headers: { "Cache-Control": "no-store" } },
     );
   } catch (e) {

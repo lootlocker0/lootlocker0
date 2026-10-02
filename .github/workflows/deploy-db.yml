@@ -1,0 +1,33 @@
+name: Deploy DB
+
+# Manual only — on: workflow_dispatch, never on push. Re-running migrations
+# automatically on every commit to production is not something anyone wants
+# happening silently. Trigger this by hand from the Actions tab whenever a
+# new migration (or, on day one, the very first one) needs to reach the
+# production database.
+#
+# Chains exactly what `npm run db:setup` already chains locally:
+#   1. prisma migrate deploy         — the real Prisma migrations
+#   2. prisma/migrations/manual_constraints.sql — CHECK constraints and the
+#      atomic book_slot()/reserve_stock()/stock-adjust functions Prisma
+#      cannot express. Nothing on a standard hosting-platform build runs
+#      this file automatically; it must be applied out of band, and it is
+#      idempotent so re-running it here on every future migration is safe.
+#   3. prisma db seed                — also idempotent (upserts), never
+#      overwrites Setting rows (tax rate, daily spend cap) that a human sets
+#      once for real.
+on: workflow_dispatch
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: ${{ secrets.PROD_DATABASE_URL }}
+      DIRECT_URL: ${{ secrets.PROD_DIRECT_URL }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npm run db:setup

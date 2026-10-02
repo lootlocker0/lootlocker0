@@ -115,6 +115,13 @@ export const ERROR_CODES = {
     status: 400,
     message: "Allergens must be reviewed before a product can be saved.",
   },
+  /// Production, no BLOB_READ_WRITE_TOKEN — see lib/blob.ts. Fail closed and
+  /// say so rather than let an image upload hit the read-only filesystem and
+  /// surface a raw EROFS to an inventory editor.
+  IMAGE_STORAGE_NOT_CONFIGURED: {
+    status: 503,
+    message: "Image storage is not configured on this server.",
+  },
 } as const;
 
 export type ErrorCode = keyof typeof ERROR_CODES;

@@ -3,6 +3,7 @@ import { db } from "@/lib/db";
 import { AppError, errorResponse } from "@/lib/errors";
 import { rateLimit } from "@/lib/rate-limit";
 import { accountSignupSchema } from "@/lib/validation";
+import { sendWelcomeEmail } from "@/lib/email";
 import {
   accountUserSelect,
   createAccountSession,
@@ -76,6 +77,7 @@ export async function POST(req: NextRequest) {
       }
       throw error;
     });
+    void sendWelcomeEmail(user.email, user.name);
     const cookie = await createAccountSession(user.id);
     const response = NextResponse.json(publicAccountUser(user), { headers: { "Cache-Control": "no-store" } });
     response.cookies.set(cookie);

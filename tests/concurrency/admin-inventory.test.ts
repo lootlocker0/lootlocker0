@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { testDb, resetDb } from "../setup/db";
+import { BASE_URL } from "../setup/env";
 import {
   ADMIN_PASSCODE,
   INVENTORY_PASSCODE,
@@ -277,6 +278,139 @@ describe("P4 money — no client-supplied money value survives", () => {
     expect((await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty).toBe(
       12,
     );
+  });
+});
+
+describe("P4 stock ledger — stock and audit row commit together", () => {
+  beforeEach(resetDb);
+
+  it("merges supplier purchases with paid order lines without returning student data", async () => {
+    const admin = await adminCookie();
+    const order = await seedPaidOrder({ qty: 2 });
+    const productId = order.items[0].productId;
+    const purchase = await adminPost(`/api/admin/products/${productId}/stock`, admin, {
+      delta: 5,
+      type: "PURCHASE",
+      unitCostCents: 125,
+    });
+    expect(purchase.status, purchase.text).toBe(200);
+
+    const response = await fetch(
+      `${BASE_URL}/api/admin/products/${productId}/transactions?take=10`,
+      { headers: { cookie: admin } },
+    );
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      transactions: { source: string; qtyDelta: number; orderStatus: string | null }[];
+    };
+    expect(body.transactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ source: "PURCHASE", qtyDelta: 5 }),
+        expect.objectContaining({ source: "SALE", qtyDelta: -2, orderStatus: "PAID" }),
+      ]),
+    );
+    expect(JSON.stringify(body)).not.toContain("studentName");
+    expect(JSON.stringify(body)).not.toContain("email");
+
+    const allTransactions = await fetch(`${BASE_URL}/api/admin/transactions?take=10`, {
+      headers: { cookie: admin },
+    });
+    expect(allTransactions.status).toBe(200);
+    const globalBody = (await allTransactions.json()) as {
+      transactions: {
+        productId: string;
+        source: string;
+        qtyDelta: number;
+        orderStatus: string | null;
+      }[];
+    };
+    expect(globalBody.transactions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ productId, source: "PURCHASE", qtyDelta: 5 }),
+        expect.objectContaining({ productId, source: "SALE", qtyDelta: -2, orderStatus: "PAID" }),
+      ]),
+    );
+    expect(JSON.stringify(globalBody)).not.toContain("studentName");
+    expect(JSON.stringify(globalBody)).not.toContain("email");
+  });
+
+  it("records manual sales and deducts exactly the sold quantity", async () => {
+    const admin = await adminCookie();
+    const product = await seedProduct({ stockQty: 12 });
+
+    const response = await adminPost("/api/admin/sales", admin, {
+      productId: product.id,
+      qty: 2,
+      saleTotalCents: 475,
+    });
+    expect(response.status, response.text).toBe(201);
+    expect(response.body).toMatchObject({
+      productId: product.id,
+      qty: 2,
+      saleTotalCents: 475,
+      stockQty: 10,
+    });
+    expect(
+      (await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty,
+    ).toBe(10);
+
+    const ledgerEntry = await testDb.stockTransaction.findUniqueOrThrow({
+      where: { id: response.body.transactionId },
+    });
+    expect(ledgerEntry).toMatchObject({
+      type: "SALE",
+      qtyDelta: -2,
+      saleTotalCents: 475,
+      stockQtyAfter: 10,
+    });
+
+    const oversell = await adminPost("/api/admin/sales", admin, {
+      productId: product.id,
+      qty: 11,
+      saleTotalCents: 2_000,
+    });
+    expect(oversell.status, oversell.text).toBe(409);
+    expect(
+      (await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty,
+    ).toBe(10);
+    expect(await testDb.stockTransaction.count({ where: { productId: product.id } })).toBe(1);
+  });
+
+  it("rolls back the stock change when the ledger insert fails", async () => {
+    const admin = await adminCookie();
+    const product = await seedProduct({ stockQty: 12 });
+
+    await testDb.$executeRawUnsafe(`
+      CREATE OR REPLACE FUNCTION qa_reject_stock_transaction() RETURNS trigger
+      LANGUAGE plpgsql AS $$
+      BEGIN
+        RAISE EXCEPTION 'forced stock transaction insert failure';
+      END;
+      $$
+    `);
+    await testDb.$executeRawUnsafe(`
+      CREATE TRIGGER qa_reject_stock_transaction
+      BEFORE INSERT ON stock_transactions
+      FOR EACH ROW EXECUTE FUNCTION qa_reject_stock_transaction()
+    `);
+
+    try {
+      const response = await adminPost(`/api/admin/products/${product.id}/stock`, admin, {
+        delta: 4,
+        type: "PURCHASE",
+        unitCostCents: 100,
+      });
+      expect(response.status, response.text).toBe(500);
+      expect(
+        (await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty,
+      ).toBe(12);
+      expect(await testDb.stockTransaction.count({ where: { productId: product.id } })).toBe(0);
+    } finally {
+      await testDb.$executeRawUnsafe(
+        "DROP TRIGGER IF EXISTS qa_reject_stock_transaction ON stock_transactions",
+      );
+      await testDb.$executeRawUnsafe("DROP FUNCTION IF EXISTS qa_reject_stock_transaction()");
+    }
   });
 });
 

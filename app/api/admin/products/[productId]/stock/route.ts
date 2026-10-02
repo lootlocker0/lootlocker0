@@ -63,16 +63,31 @@ export async function POST(
         fields: parsed.error.flatten().fieldErrors,
       });
     }
-    const { delta } = parsed.data;
+    const { delta, type, unitCostCents } = parsed.data;
 
-    // The whole decision, in one statement. `stock` is the new quantity, or
-    // null if the product is missing or the change would go below zero.
-    const rows = await db.$queryRaw<{ stock: number | null }[]>`
-      SELECT adjust_stock(${productId}::text, ${delta}::int) AS stock
-    `;
-    const stockQty = rows[0]?.stock ?? null;
+    // The atomic stock update and its audit row either commit together or
+    // neither becomes visible.
+    const mutation = await db.$transaction(async (tx) => {
+      const rows = await tx.$queryRaw<{ stock: number | null }[]>`
+        SELECT adjust_stock(${productId}::text, ${delta}::int) AS stock
+      `;
+      const stockQty = rows[0]?.stock ?? null;
+      if (stockQty === null) return null;
 
-    if (stockQty === null) {
+      const transaction = await tx.stockTransaction.create({
+        data: {
+          productId,
+          type,
+          qtyDelta: delta,
+          unitCostCents: unitCostCents ?? null,
+          stockQtyAfter: stockQty,
+          sessionId,
+        },
+        select: { id: true },
+      });
+      return { stockQty, transactionId: transaction.id };
+    });
+    if (mutation === null) {
       // Diagnostic ONLY — the decision was already made and committed above.
       // This read exists to tell a staff member which of the two failures they
       // hit, and it can never cause a write.
@@ -87,12 +102,14 @@ export async function POST(
         delta,
       });
     }
+    const { stockQty } = mutation;
 
     // Non-PII by construction: a product id, a count, a session. No student is
     // involved in a stock adjustment and none appears in this line.
     logEvent("admin_stock_adjusted", {
       productId,
       delta,
+      type,
       stockQty,
       sessionId,
     });
@@ -110,6 +127,9 @@ export async function POST(
         /// it already includes any concurrent checkout that landed first.
         stockQty,
         delta,
+        type,
+        unitCostCents: unitCostCents ?? null,
+        transactionId: mutation.transactionId,
         /// Derived arithmetic from the atomic result, not a second read — it is
         /// what the quantity was at the instant of the write.
         previousStockQty: stockQty - delta,
