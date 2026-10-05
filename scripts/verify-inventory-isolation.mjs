@@ -78,7 +78,6 @@ const FORBIDDEN = [
   [/\bdb\.order\b/, "Order model access"],
   [/\bdb\.orderItem\b/, "OrderItem model access"],
   [/\bdb\.setting\b/, "Setting model access"],
-  [/\bdb\.pickupSlot\b/, "PickupSlot model access"],
   [/\bdb\.webhookEvent\b/, "WebhookEvent model access"],
   [/\btx\.order\b/, "Order model access inside a transaction"],
   [/\bgetSetting\s*\(/, "settings read"],
@@ -92,7 +91,7 @@ const FORBIDDEN = [
   [/from\s+["']@\/lib\/email["']/, "import of lib/email"],
   // Raw SQL against anything but products. adjust_stock() is the one function
   // this namespace may call and it touches the products table only.
-  [/\b(from|into|update|join)\s+(orders|order_items|settings|pickup_slots|webhook_events)\b/i,
+  [/\b(from|into|update|join)\s+(orders|order_items|settings|webhook_events)\b/i,
     "raw SQL against a non-product table"],
   [/\breserve_stock\s*\(/, "reserve_stock (checkout's function, not this role's)"],
   [/\bbook_slot\s*\(/, "book_slot (slot capacity is not this role's)"],

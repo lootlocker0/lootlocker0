@@ -4,6 +4,8 @@ import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { STRIPE_REAL_DATABASE_URL } from "./env";
 import { schoolParts } from "@/lib/timezone";
+import { pickupWindowId } from "@/lib/pickup-windows";
+import { TEST_PICKUP_WINDOWS_DDL } from "../fixtures/test-pickup-windows-ddl";
 
 /** Same shape as tests/e2e/setup/db.ts, pointed at this suite's own database. */
 export const stripeRealDb: PrismaClient = new PrismaClient({
@@ -23,6 +25,11 @@ export function prepareSchema(): void {
   execSync("npx prisma migrate deploy", { env, stdio: "pipe" });
   execSync(
     `psql "${STRIPE_REAL_DATABASE_URL}" -v ON_ERROR_STOP=1 -f prisma/migrations/manual_constraints.sql`,
+    { env, stdio: "pipe" },
+  );
+  // Test-only, NOT a production table — see lib/pickup-windows-test.ts.
+  execSync(
+    `psql "${STRIPE_REAL_DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${TEST_PICKUP_WINDOWS_DDL}"`,
     { env, stdio: "pipe" },
   );
 }
@@ -48,22 +55,25 @@ export async function seedProduct() {
   });
 }
 
-/** A pickup window three hours out on the school's (America/Vancouver) clock — matches tests/e2e/setup/db.ts's seedSlot default. */
+/** A pickup window three hours out on the school's (America/Vancouver) clock
+ * — matches tests/e2e/setup/db.ts's seedSlot default. No PickupSlot table
+ * anymore — declares a `test_pickup_windows` row instead (see
+ * lib/pickup-windows-test.ts), which the real checkout/slots routes resolve
+ * exactly like a production template entry, only when
+ * QA_ALLOW_TEST_WINDOWS=1 (never in production). */
 export async function seedSlot() {
   const target = new Date(Date.now() + 180 * 60_000);
   const p = schoolParts(target);
   const serviceDate = new Date(Date.UTC(p.year, p.month - 1, p.day, 0, 0, 0, 0));
   const startTime = `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  const location = `Locker bank R ${uniq()}`;
+  const label = `Stripe Real Test Window ${uniq()}`;
+  const capacity = 20;
 
-  return stripeRealDb.pickupSlot.create({
-    data: {
-      label: `Stripe Real Test Window ${uniq()}`,
-      startTime,
-      location: "Locker bank R",
-      serviceDate,
-      capacity: 20,
-      bookedCount: 0,
-      active: true,
-    },
-  });
+  await stripeRealDb.$executeRaw`
+    INSERT INTO test_pickup_windows (service_date, start_time, location, label, capacity)
+    VALUES (${serviceDate}, ${startTime}, ${location}, ${label}, ${capacity})
+  `;
+
+  return { id: pickupWindowId(serviceDate, startTime, location), label, startTime, location, serviceDate, capacity };
 }

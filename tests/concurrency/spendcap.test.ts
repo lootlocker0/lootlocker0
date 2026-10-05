@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { testDb, resetDb } from "../setup/db";
 import {
   checkoutPayload,
+  countBookedOrders,
   paymentIntentSucceeded,
   postCheckout,
   postWebhook,
@@ -385,9 +386,9 @@ describe("daily spend cap", () => {
     expect(committed).toBe(60);
     // The books have to balance under the queue as well as the cap: one seat per
     // committed order, no more.
-    const after = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(after.bookedCount).toBe(60);
-    expect(after.bookedCount).toBeLessThanOrEqual(after.capacity);
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(booked).toBe(60);
+    expect(booked).toBeLessThanOrEqual(slot.capacity);
   });
 
   /**

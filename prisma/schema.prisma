@@ -152,46 +152,15 @@ model Product {
 // ─────────────────────────────────────────────────────────────────────────────
 // Pickup
 // ─────────────────────────────────────────────────────────────────────────────
-
-model PickupSlot {
-  id String @id @default(cuid())
-
-  /// Student-facing name of the window, e.g. "Lunch A".
-  label String
-
-  /// Local wall-clock start, 24h "HH:MM". Parsed by the cutoff check.
-  startTime String @map("start_time")
-
-  /// Physical handout point, e.g. "Locker bank C".
-  location String
-
-  /// Midnight (local) of the service day. Stored as a full timestamp rather
-  /// than a DATE because the cutoff check does
-  /// `new Date(serviceDate).setHours(h, m)` — a DATE column comes back as UTC
-  /// midnight and that arithmetic then lands on the wrong day west of
-  /// Greenwich. See docs/HANDOFF.md — timezone handling is an open item.
-  serviceDate DateTime @map("service_date")
-
-  /// Physical handout throughput, not aspiration. School sign-off item.
-  capacity Int
-
-  /// Only ever moved by book_slot() (up) and the release path (down).
-  /// `booked_within_capacity` in manual_constraints.sql is the backstop.
-  bookedCount Int @default(0) @map("booked_count")
-
-  active Boolean @default(true)
-
-  createdAt DateTime @default(now()) @map("created_at")
-  updatedAt DateTime @updatedAt @map("updated_at")
-
-  orders Order[]
-
-  // One window per (day, time, place). Makes the seed idempotent and stops a
-  // duplicated slot from silently doubling real capacity.
-  @@unique([serviceDate, startTime, location])
-  @@index([active, serviceDate])
-  @@map("pickup_slots")
-}
+//
+// There is deliberately no PickupSlot table. The four daily windows
+// (times/locations/capacities) live in lib/pickup-windows.ts as a fixed
+// in-code template — "today," "tomorrow," etc. are derived live from the
+// school's real clock, never pre-seeded, so there is no rolling window that
+// can run dry. "How many seats are taken" is a live COUNT over Order rows
+// (see Order.seatReleasedAt below and book_pickup_window() in
+// manual_constraints.sql), not a stored counter on a row that has to exist
+// ahead of time.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Orders
@@ -205,7 +174,7 @@ model Order {
   orderNumber String @unique @map("order_number")
 
   /// Four characters from an unambiguous alphabet, read aloud at the locker.
-  /// Unique per slot only — see @@unique below.
+  /// Unique per pickup window only — see @@unique below.
   pickupCode String @map("pickup_code")
 
   // PII. Never in a URL, a log line, or an analytics payload (CLAUDE.md §2.6).
@@ -214,8 +183,22 @@ model Order {
   phone       String
   homeroom    String?
 
-  slotId String     @map("slot_id")
-  slot   PickupSlot @relation(fields: [slotId], references: [id], onDelete: Restrict)
+  // Pickup-window snapshot, written once at checkout from
+  // lib/pickup-windows.ts — same philosophy as OrderItem's name/price/rarity/
+  // allergens snapshot (CLAUDE.md §2.5). Capacity is deliberately NOT
+  // snapshotted: GET /api/slots must always evaluate remaining seats against
+  // the CURRENT template, never whatever it was when this order was placed.
+  pickupLabel       String   @map("pickup_label")
+  pickupStartTime   String   @map("pickup_start_time")
+  pickupLocation    String   @map("pickup_location")
+  pickupServiceDate DateTime @map("pickup_service_date")
+
+  /// Replaces PickupSlot.bookedCount's decrement. Null = this order still
+  /// holds a pickup-window seat. Set exactly once, idempotently (the
+  /// conditional UPDATE IS the lock — see lib/db/release.ts and the admin
+  /// refund route), by order cancel/expiry and by an admin refund that
+  /// releases the seat. Never cleared back to null.
+  seatReleasedAt DateTime? @map("seat_released_at")
 
   /// Set only when the checkout request carried a valid `ll_account` session
   /// at the moment the order was created — orders placed before an account
@@ -253,15 +236,16 @@ model Order {
   items OrderItem[]
 
   // Read aloud in a hallway: the code only has to be unique within the window
-  // it is presented in. 26^4 over one slot is plenty; globally unique 4-char
-  // codes would collide constantly and force ugly retries.
-  @@unique([slotId, pickupCode])
+  // it is presented in. 26^4 over one window is plenty; globally unique
+  // 4-char codes would collide constantly and force ugly retries.
+  @@unique([pickupServiceDate, pickupStartTime, pickupLocation, pickupCode])
   // Daily spend cap aggregate: WHERE email = ? AND createdAt >= ?
   @@index([email, createdAt])
   // Expiry sweep: WHERE status = 'PENDING' AND expiresAt < now()
   @@index([status, expiresAt])
-  // Admin pick list: today's orders grouped by slot.
-  @@index([slotId, status])
+  // book_pickup_window()'s live COUNT, the admin pick list grouped by
+  // window, and GET /api/slots' groupBy all serve off this one index.
+  @@index([pickupServiceDate, pickupStartTime, pickupLocation])
   // Account order-history lookup: WHERE user_id = ? ORDER BY created_at DESC
   @@index([userId, createdAt])
   @@map("orders")

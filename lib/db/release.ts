@@ -18,34 +18,32 @@ export async function releaseOrder(
       // exactly one matches a row and the other matches zero and stops. A
       // `findUnique` then `if (status === "PENDING")` would let both through and
       // restock the same snacks twice.
+      // Flipping status and releasing the pickup-window seat in the same
+      // conditional UPDATE: there's no separate pickup-slot row anymore, so
+      // "give the seat back" is just excluding this order from the next
+      // book_pickup_window()/GET-/api/slots COUNT(*), which setting
+      // seatReleasedAt does directly. seat_released_only_when_terminal in
+      // manual_constraints.sql backstops this against ever being set outside
+      // a status that actually means "released".
       const { count } = await tx.order.updateMany({
         where: { id: orderId, status: "PENDING" },
-        data: { status: finalStatus, expiresAt: null },
+        data: { status: finalStatus, expiresAt: null, seatReleasedAt: new Date() },
       });
       if (count === 0) return { released: false };
 
-      const order = await tx.order.findUniqueOrThrow({
-        where: { id: orderId },
-        select: { slotId: true },
-      });
-
       // ── Lock ordering. This is not cosmetic. ───────────────────────────────
-      // The checkout transaction takes the slot row first (book_slot) and then
-      // product rows in ascending id order (reserve_stock). This function takes
-      // exactly the same path: slot, then products ascending. backend.md §6
-      // does the reverse — products first, then the slot — which is an ABBA
-      // deadlock against a concurrent checkout on the same slot and product, and
-      // it does not sort the products, which is a second ABBA deadlock between
-      // two concurrent releases of two orders sharing two products. Postgres
-      // resolves a deadlock by killing one side, so both would surface as a 500
-      // in the middle of a lunch rush rather than as anything a client can
-      // handle.
-      await tx.$executeRaw`
-        UPDATE pickup_slots
-           SET booked_count = GREATEST(booked_count - 1, 0),
-               updated_at   = now()
-         WHERE id = ${order.slotId}
-      `;
+      // The checkout transaction reserves product rows in ascending id order
+      // (reserve_stock). This function follows the same order. There used to
+      // be a pickup-slot row in this chain too (book_slot, then products
+      // ascending) — gone now, since releasing a seat is just the UPDATE
+      // above, with no second row for this function or book_pickup_window()'s
+      // advisory lock to ever contend over. backend.md §6 historically got
+      // the product ordering backwards and unsorted, which is an ABBA
+      // deadlock against a concurrent checkout on the same product, and a
+      // second ABBA deadlock between two concurrent releases of two orders
+      // sharing two products. Postgres resolves a deadlock by killing one
+      // side, so both would surface as a 500 in the middle of a lunch rush
+      // rather than as anything a client can handle.
 
       // This orderBy is currently redundant, not decorative — leave it. qa
       // deleted it and ran eight concurrent releases of two orders sharing two

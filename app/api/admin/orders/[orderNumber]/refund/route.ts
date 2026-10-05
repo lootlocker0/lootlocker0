@@ -174,11 +174,10 @@ export async function POST(
 
     // ── 3. The books ─────────────────────────────────────────────────────────
     //
-    // Lock order inside this transaction is order row -> slot row, matching
-    // lib/db/release.ts (order -> slot -> products) and compatible with the
-    // global order the checkout transaction takes (mailbox -> slot ->
-    // products). Taking the slot before the order row here would be an ABBA
-    // deadlock against a concurrent release.
+    // Just the order row now — there is no separate pickup-slot row to take a
+    // second lock against, so the old "order row -> slot row" ordering this
+    // comment used to document no longer applies. Compatible with the global
+    // order the checkout transaction takes (mailbox -> products).
     const result = await db.$transaction(
       async (tx) => {
         // Split into two conditional updates rather than one, because whether
@@ -188,24 +187,20 @@ export async function POST(
         // are mutually exclusive, so at most one can match.
         const beforeHandover = await tx.order.updateMany({
           where: { id: order.id, status: { in: [...SEAT_RELEASABLE_FROM] } },
-          data: { status: "REFUNDED", expiresAt: null },
+          data: {
+            status: "REFUNDED",
+            expiresAt: null,
+            // Setting a null timestamp to now() is idempotent by construction
+            // — reachable at most once per order because the conditional
+            // update above gates it, so unlike the old GREATEST(...,0) floor
+            // on a shared counter, there is no double-release to clamp here.
+            ...(releaseSlotSeat ? { seatReleasedAt: new Date() } : {}),
+          },
         });
 
-        let seatReleased = false;
+        const seatReleased = beforeHandover.count === 1 && releaseSlotSeat;
 
         if (beforeHandover.count === 1) {
-          if (releaseSlotSeat) {
-            // GREATEST(…, 0) matches lib/db/release.ts. Reachable at most once
-            // per order because the conditional update above gates it, so the
-            // floor is a backstop here rather than the thing doing the work.
-            await tx.$executeRaw`
-              UPDATE pickup_slots
-                 SET booked_count = GREATEST(booked_count - 1, 0),
-                     updated_at   = now()
-               WHERE id = ${order.slotId}
-            `;
-            seatReleased = true;
-          }
           if (order.paidAt && order.userId) {
             await reverseRewardPoints(tx, order.userId, pointsToReverse);
           }

@@ -15,14 +15,18 @@
 --      functions below, the write fails loudly instead of quietly selling
 --      snacks that do not exist.
 --
---   2. book_slot() and reserve_stock(). The only sanctioned way to move slot
---      capacity and stock (CLAUDE.md §2.4). Both do their check and their
---      write in a single UPDATE ... WHERE statement. That is the whole point:
+--   2. book_pickup_window() and reserve_stock(). The only sanctioned way to
+--      move pickup-window occupancy and stock (CLAUDE.md §2.4). reserve_stock()
+--      does its check and its write in a single UPDATE ... WHERE statement —
 --      under READ COMMITTED, a concurrent UPDATE re-evaluates the WHERE clause
 --      after it acquires the row lock, so the loser of the race sees the
---      winner's value and matches zero rows. An application-level
---      `if (booked < capacity) { update }` reads a stale value outside the
---      lock and loses this race every single time under real load.
+--      winner's value and matches zero rows. book_pickup_window() has no row
+--      to lock (there is no pickup-slot table — see lib/pickup-windows.ts), so
+--      it reconstructs the same guarantee with a transaction-scoped advisory
+--      lock instead: see §2 below for why that closes the race identically.
+--      An application-level `if (booked < capacity) { update }` reads a stale
+--      value outside any lock and loses this race every single time under
+--      real load.
 
 BEGIN;
 
@@ -49,28 +53,17 @@ BEGIN
       ADD CONSTRAINT product_price_non_negative CHECK (price_cents >= 0);
   END IF;
 
-  -- Slot bookings: never negative, never past capacity, capacity never negative.
+  -- A seat may only ever be released from a status that actually releases
+  -- one. Belt-and-braces against a future bug writing seat_released_at on a
+  -- still-live order — book_pickup_window()'s live COUNT(*) excludes any
+  -- order with seat_released_at set, so a wrongly-released seat is a real
+  -- oversell risk, not just a cosmetic inconsistency.
   IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'booked_count_non_negative'
+    SELECT 1 FROM pg_constraint WHERE conname = 'seat_released_only_when_terminal'
   ) THEN
-    ALTER TABLE pickup_slots
-      ADD CONSTRAINT booked_count_non_negative CHECK (booked_count >= 0);
-  END IF;
-
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'slot_capacity_non_negative'
-  ) THEN
-    ALTER TABLE pickup_slots
-      ADD CONSTRAINT slot_capacity_non_negative CHECK (capacity >= 0);
-  END IF;
-
-  -- The oversell backstop. book_slot() enforces this too; this makes an
-  -- oversell impossible even if someone writes booked_count by hand.
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint WHERE conname = 'booked_within_capacity'
-  ) THEN
-    ALTER TABLE pickup_slots
-      ADD CONSTRAINT booked_within_capacity CHECK (booked_count <= capacity);
+    ALTER TABLE orders
+      ADD CONSTRAINT seat_released_only_when_terminal
+      CHECK (seat_released_at IS NULL OR status IN ('CANCELLED', 'EXPIRED', 'REFUNDED'));
   END IF;
 
   -- Order money. Non-negative, and the total must actually be the sum of its
@@ -113,36 +106,72 @@ END
 $$;
 
 -- ─────────────────────────────────────────────────────────────────────────────
--- 2. Atomic slot booking
+-- 2. Atomic pickup-window booking
 -- ─────────────────────────────────────────────────────────────────────────────
 
--- Claims one seat in a pickup slot. Returns TRUE if the seat was claimed,
--- FALSE if the slot is missing, inactive, or already full.
+DROP FUNCTION IF EXISTS book_slot(text);
+
+-- Checks whether a pickup window has a free seat, and reserves it for the
+-- caller's IN-FLIGHT INSERT if so. There is no pickup_slots row to lock
+-- anymore (capacity lives in the application's template, lib/pickup-
+-- windows.ts; "booked" is a live count over `orders`, not a stored
+-- counter) — so this reconstructs the same atomicity reserve_stock() gets
+-- from a single UPDATE ... WHERE, using a transaction-scoped advisory lock
+-- instead of a row lock:
 --
--- Callers must treat FALSE as SLOT_FULL and abort the surrounding transaction.
--- The increment is released by lib/db/release.ts, not by another function here.
-CREATE OR REPLACE FUNCTION book_slot(p_slot_id text)
-RETURNS boolean
+--   1. pg_advisory_xact_lock serializes every caller racing for the SAME
+--      (service_date, start_time, location) behind one key. Postgres queues
+--      them and releases the lock only at COMMIT or ROLLBACK.
+--   2. Because the lock is held until commit, and a commit is recorded
+--      before its advisory lock is released, the NEXT caller's COUNT(*) —
+--      a fresh snapshot under READ COMMITTED, taken only after it acquires
+--      the lock — is guaranteed to see every seat the previous holder
+--      actually kept. This is the exact guarantee the old single UPDATE
+--      statement gave book_slot(); there is just no row to hang it on.
+--
+-- Returns TRUE if the caller may create an order holding this seat, FALSE if
+-- the window is already at or over capacity. p_capacity is supplied by the
+-- CALLER (from the current template) — this function does not know what a
+-- valid window is, only how to serialize and count. The caller's order
+-- INSERT must happen inside the SAME transaction as this call, before
+-- commit, or the lock's guarantee is void. Release is a plain
+-- `UPDATE orders SET seat_released_at = now() WHERE id = ? AND
+-- seat_released_at IS NULL` in lib/db/release.ts and the admin refund
+-- route — no second function needed, since "give a seat back" is just
+-- excluding that order from the next COUNT(*).
+CREATE OR REPLACE FUNCTION book_pickup_window(
+  p_service_date timestamp,
+  p_start_time   text,
+  p_location     text,
+  p_capacity     int
+) RETURNS boolean
 LANGUAGE plpgsql
 VOLATILE
 AS $$
 DECLARE
-  v_rows int;
+  v_lock_key text;
+  v_count    int;
 BEGIN
-  UPDATE pickup_slots
-     SET booked_count = booked_count + 1,
-         updated_at   = now()
-   WHERE id = p_slot_id
-     AND active = true
-     AND booked_count < capacity;
+  IF p_capacity IS NULL OR p_capacity < 0 THEN
+    RETURN false;
+  END IF;
 
-  GET DIAGNOSTICS v_rows = ROW_COUNT;
-  RETURN v_rows = 1;
+  v_lock_key := p_service_date::text || '|' || p_start_time || '|' || p_location;
+  PERFORM pg_advisory_xact_lock(hashtextextended(v_lock_key, 0));
+
+  SELECT count(*) INTO v_count
+    FROM orders
+   WHERE pickup_service_date = p_service_date
+     AND pickup_start_time   = p_start_time
+     AND pickup_location     = p_location
+     AND seat_released_at IS NULL;
+
+  RETURN v_count < p_capacity;
 END;
 $$;
 
-COMMENT ON FUNCTION book_slot(text) IS
-  'Atomically claims one seat in a pickup slot. TRUE = claimed, FALSE = full/inactive/missing. Check and write happen in one UPDATE; never replace with a read-then-write.';
+COMMENT ON FUNCTION book_pickup_window(timestamp, text, text, int) IS
+  'Atomically checks whether a pickup window has a free seat, serialized per (service_date, start_time, location) by a transaction-scoped advisory lock. TRUE = caller may insert an order holding this seat, FALSE = full. The caller''s order INSERT must happen inside the SAME transaction, before commit, or the lock''s guarantee is void.';
 
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 3. Atomic stock reservation

@@ -27,7 +27,7 @@ export async function setup() {
   });
 
   await db.$executeRawUnsafe(
-    `TRUNCATE order_items, orders, webhook_events, products, pickup_slots RESTART IDENTITY CASCADE`,
+    `TRUNCATE order_items, orders, webhook_events, products, test_pickup_windows RESTART IDENTITY CASCADE`,
   );
 
   const sentinel = await db.product.create({

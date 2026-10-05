@@ -49,8 +49,11 @@ Violating one of these is a stop-and-report, not a work-around.
    are logged and discarded.
 3. **Stripe webhooks are the only source of truth for payment.** Client-side
    `status === 'succeeded'` never flips an order to PAID.
-4. **Stock and slots move through `reserve_stock()` / `book_slot()`.** Never a
-   read-then-write in app code.
+4. **Stock and pickup windows move through `reserve_stock()` /
+   `book_pickup_window()`.** Never a read-then-write in app code. There is no
+   `PickupSlot` table — windows are a fixed template (`lib/pickup-windows.ts`)
+   and "booked" is a live count over `orders`, serialized by a transaction-
+   scoped advisory lock instead of a row lock.
 5. **Order lines snapshot** name, price, rarity, allergens at purchase time.
 6. **No PII in URLs, logs, or analytics.** These are children.
 7. **Allergen data is safety-critical.** Never inferred, never defaulted, never

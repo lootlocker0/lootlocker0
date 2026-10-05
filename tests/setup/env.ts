@@ -53,6 +53,10 @@ export function serverEnv(): NodeJS.ProcessEnv {
     TZ: SERVER_TZ,
     DATABASE_URL: TEST_DATABASE_URL,
     DIRECT_URL: TEST_DATABASE_URL,
+    // Lets seedSlot() (tests/helpers.ts) declare an isolated, arbitrary-
+    // capacity test window the real checkout/slots routes will honor — see
+    // lib/pickup-windows-test.ts. Never set in production.
+    QA_ALLOW_TEST_WINDOWS: "1",
     STRIPE_SECRET_KEY: "sk_test_placeholder",
     STRIPE_WEBHOOK_SECRET,
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_placeholder",

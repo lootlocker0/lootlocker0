@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { e2eDb, seedProduct, seedSlot } from "./setup/db";
+import { countBookedOrders, e2eDb, seedProduct, seedSlot } from "./setup/db";
 import { ADMIN_PASSCODE, INVENTORY_PASSCODE } from "./setup/env";
 import {
   paymentIntentSucceeded,
@@ -242,8 +242,7 @@ test.describe("staff admin — card refund", () => {
 
     const stockBefore = (await e2eDb.product.findUniqueOrThrow({ where: { id: product.id } }))
       .stockQty;
-    const seatBefore = (await e2eDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } }))
-      .bookedCount;
+    const seatBefore = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
 
     await openPickList(page);
     const card = orderCard(page, order.orderNumber);
@@ -273,8 +272,7 @@ test.describe("staff admin — card refund", () => {
     ).toBeVisible();
 
     // The seat was not released, because the box was not ticked.
-    const seatAfter = (await e2eDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } }))
-      .bookedCount;
+    const seatAfter = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
     expect(seatAfter).toBe(seatBefore);
 
     // ── the explicit restock prompt does what it says, once ──

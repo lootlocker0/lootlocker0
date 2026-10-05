@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { e2eDb, seedProduct, seedSlot } from "./setup/db";
+import { countBookedOrders, e2eDb, seedProduct, seedSlot } from "./setup/db";
 import { ADMIN_PASSCODE, INVENTORY_PASSCODE } from "./setup/env";
 import {
   adminApiToken,
@@ -452,9 +452,9 @@ test.describe("inventory editor — money and stock", () => {
     const after = await e2eDb.product.findUniqueOrThrow({ where: { id: product.id } });
     expect(after.stockQty, "12 adjustments and 8 sales did not compose").toBe(40 + 12 - 8);
 
-    const slotAfter = await e2eDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(slotAfter.bookedCount).toBe(8);
-    expect(slotAfter.bookedCount).toBeLessThanOrEqual(slotAfter.capacity);
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(booked).toBe(8);
+    expect(booked).toBeLessThanOrEqual(slot.capacity);
   });
 
   test("a delta that would go negative is refused and reports the real quantity", async ({

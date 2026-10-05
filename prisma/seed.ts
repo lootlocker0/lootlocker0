@@ -7,17 +7,22 @@
  * errors. Every write below is an upsert on a real unique key:
  *
  *   products      → slug
- *   pickup_slots  → (serviceDate, startTime, location)
  *   settings      → key
  *
- * Three deliberate non-overwrites, because a seed re-run must never destroy
+ * There is nothing to seed for pickup windows anymore. The four daily
+ * windows live in lib/pickup-windows.ts as a fixed in-code template —
+ * "today," "tomorrow," etc. are derived live from the school's clock, never
+ * pre-seeded — so there is no rolling window that can run dry (the
+ * production incident this change exists to fix permanently: the old
+ * PickupSlot table only ever got a 7-day head start from whenever this seed
+ * last ran, and nothing re-ran it).
+ *
+ * Two deliberate non-overwrites, because a seed re-run must never destroy
  * operational state:
  *
  *   · Product.stockQty is set on create only. Stock belongs to reserve_stock()
  *     and the release path; a seed that resets it can un-sell snacks that have
  *     already been paid for. Pass SEED_RESET_STOCK=1 to opt in for local dev.
- *   · PickupSlot.capacity and bookedCount are set on create only, for the same
- *     reason plus the booked_within_capacity CHECK constraint.
  *   · Setting values are written on create only. Changing the spend cap or the
  *     tax rate is a human decision (CLAUDE.md §7), and a seed run must not
  *     silently revert one.
@@ -42,7 +47,6 @@ import "dotenv/config";
 import type { Allergen, Rarity } from "@prisma/client";
 
 import { db } from "../lib/db";
-import { schoolParts } from "../lib/timezone";
 
 const RESET_STOCK = process.env.SEED_RESET_STOCK === "1";
 
@@ -250,35 +254,6 @@ const PRODUCTS: SeedProduct[] = [
 ];
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Pickup slots
-// ─────────────────────────────────────────────────────────────────────────────
-
-/**
- * Placeholder bell schedule. The real one, and the real per-slot handout
- * throughput, are school sign-off items (CLAUDE.md §7).
- */
-const SLOT_TEMPLATE = [
-  { label: "Pickup 1", startTime: "07:50", location: "Locker B449", capacity: 24 },
-  { label: "Pickup 2", startTime: "10:50", location: "Hub", capacity: 24 },
-  { label: "Pickup 3", startTime: "11:20", location: "Hub", capacity: 18 },
-  { label: "Pickup 4", startTime: "14:30", location: "Locker B449", capacity: 18 },
-];
-
-/** Seed the current day plus a few upcoming service days so the pickup picker
- * shows the next available windows instead of a blank list during an empty slot
- * rollout or a short early-morning gap.
- */
-const SLOT_DAYS = 7;
-
-/**
- * UTC-midnight date key for the school's calendar day plus offset.
- */
-function serviceDay(offset: number): Date {
-  const p = schoolParts();
-  return new Date(Date.UTC(p.year, p.month - 1, p.day + offset));
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 // Settings — defaults mirror lib/settings.ts
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -312,15 +287,6 @@ async function main() {
       ],
     },
     data: { active: false },
-  });
-
-  // Remove stale future pickup slots so a reseed does not keep showing the old
-  // multi-day list alongside the new single-day schedule.
-  await db.pickupSlot.deleteMany({
-      where: {
-        serviceDate: { gte: serviceDay(0) },
-        orders: { none: {} },
-      },
   });
 
   // ── Products ──────────────────────────────────────────────────────────────
@@ -360,36 +326,6 @@ async function main() {
     });
   }
 
-  // ── Pickup slots ──────────────────────────────────────────────────────────
-  for (let day = 0; day < SLOT_DAYS; day++) {
-    const serviceDate = serviceDay(day);
-
-    for (const s of SLOT_TEMPLATE) {
-      await db.pickupSlot.upsert({
-        where: {
-          serviceDate_startTime_location: {
-            serviceDate,
-            startTime: s.startTime,
-            location: s.location,
-          },
-        },
-        create: {
-          label: s.label,
-          startTime: s.startTime,
-          location: s.location,
-          serviceDate,
-          capacity: s.capacity,
-          active: true,
-        },
-        update: {
-          // capacity and bookedCount are intentionally left alone.
-          label: s.label,
-          active: true,
-        },
-      });
-    }
-  }
-
   // ── Settings ──────────────────────────────────────────────────────────────
   for (const [key, value] of Object.entries(SETTINGS)) {
     await db.setting.upsert({
@@ -400,19 +336,17 @@ async function main() {
     });
   }
 
-  const [products, slots, settings, soldOut, futureSlots] = await Promise.all([
+  const [products, settings, soldOut] = await Promise.all([
     db.product.count(),
-    db.pickupSlot.count(),
     db.setting.count(),
     db.product.count({ where: { stockQty: 0 } }),
-    db.pickupSlot.count({ where: { serviceDate: { gte: serviceDay(0) } } }),
   ]);
 
   console.log(
     [
       "seed complete",
       `  products      ${products} (${soldOut} sold out)`,
-      `  pickup slots  ${slots} (${futureSlots} today or later)`,
+      `  pickup windows  (template-derived, not seeded — see lib/pickup-windows.ts)`,
       `  settings      ${settings}`,
       `  stock reset   ${RESET_STOCK ? "yes (SEED_RESET_STOCK=1)" : "no"}`,
     ].join("\n"),

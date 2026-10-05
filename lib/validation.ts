@@ -102,7 +102,11 @@ export const checkoutSchema = z.object({
 
   homeroom: z.string().trim().max(20).optional(),
 
-  slotId: z.cuid(),
+  /// A pickup-window id from lib/pickup-windows.ts — a composite string
+  /// (`serviceDate|startTime|location`), not a database row id, since there
+  /// is no PickupSlot table anymore. Loosely bounded; findPickupWindow()
+  /// does the real validation and returns null for anything unresolvable.
+  slotId: z.string().min(1).max(160),
 
   paymentMethod: z.enum(["CARD", "CASH_AT_PICKUP"]),
 
@@ -156,15 +160,16 @@ export const adminLoginSchema = z.object({
 /// `GET /api/admin/orders`. The pick list.
 export const adminOrdersQuerySchema = z.object({
   /// The school's calendar day, `YYYY-MM-DD`. Defaults to today in the school's
-  /// timezone (lib/timezone.ts). Matched against `PickupSlot.serviceDate`, which
-  /// is a date key stored at midnight UTC — not an instant.
+  /// timezone (lib/timezone.ts). Matched against `Order.pickupServiceDate`,
+  /// which is a date key stored at midnight UTC — not an instant.
   date: z
     .string()
     .regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD")
     .optional(),
 
-  /// Narrow to one pickup window, for the screen staff have open at the locker.
-  slotId: z.cuid().optional(),
+  /// Narrow to one pickup window, for the screen staff have open at the
+  /// locker. Same composite id as checkoutSchema.slotId.
+  slotId: z.string().min(1).max(160).optional(),
 
   /// Comma-separated `OrderStatus` values. Omitted means the default working
   /// set (see the route). Validated against the enum for the same reason

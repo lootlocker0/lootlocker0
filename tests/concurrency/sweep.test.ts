@@ -3,6 +3,7 @@ import { testDb, resetDb } from "../setup/db";
 import {
   chargeRefunded,
   checkoutPayload,
+  countBookedOrders,
   paymentIntentFailed,
   paymentIntentSucceeded,
   postCheckout,
@@ -48,8 +49,12 @@ describe("expiry sweep", () => {
     expect(after.stockQty).toBe(before.stockQty + order.items[0].qty);
     expect(after.stockQty).toBe(20);
 
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
-    expect(slot.bookedCount).toBe(0);
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
+    expect(booked).toBe(0);
 
     const o = await testDb.order.findUniqueOrThrow({ where: { id: order.id } });
     expect(o.status).toBe("EXPIRED");
@@ -79,20 +84,24 @@ describe("expiry sweep", () => {
     expect(["PAID", "EXPIRED"]).toContain(after.status);
 
     const stock = await testDb.product.findUniqueOrThrow({ where: { id: productId } });
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
-    expect(slot.bookedCount).toBeGreaterThanOrEqual(0);
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
+    expect(booked).toBeGreaterThanOrEqual(0);
 
     if (after.status === "PAID") {
       // Paid means the hold must still be held: the snack is on the shelf for
       // this student and the seat is theirs.
       expect(stock.stockQty).toBe(19);
-      expect(slot.bookedCount).toBe(1);
+      expect(booked).toBe(1);
       expect(after.expiresAt).toBeNull();
     } else {
       // Expired means everything went back exactly once, and — critically —
       // the payment must NOT have been recorded as paid.
       expect(stock.stockQty).toBe(20);
-      expect(slot.bookedCount).toBe(0);
+      expect(booked).toBe(0);
       expect(after.paidAt).toBeNull();
     }
   });
@@ -121,10 +130,14 @@ describe("expiry sweep", () => {
 
     const after = await testDb.order.findUniqueOrThrow({ where: { id: order.id } });
     const stock = await testDb.product.findUniqueOrThrow({ where: { id: productId } });
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
     console.log(
       `[sweep vs refund] status=${after.status} stock=${stock.stockQty}/20 ` +
-        `bookedCount=${slot.bookedCount}`,
+        `booked=${booked}`,
     );
 
     // The refund beats every status except REFUNDED, so it wins whichever order
@@ -136,11 +149,11 @@ describe("expiry sweep", () => {
 
     // Released exactly once, or not at all. Never twice.
     expect([19, 20]).toContain(stock.stockQty);
-    expect([0, 1]).toContain(slot.bookedCount);
+    expect([0, 1]).toContain(booked);
     // And the two holds agree with each other — a released seat with held stock
     // (or the reverse) would mean the release ran partially.
-    expect(slot.bookedCount).toBe(stock.stockQty === 20 ? 0 : 1);
-    expect(slot.bookedCount).toBeGreaterThanOrEqual(0);
+    expect(booked).toBe(stock.stockQty === 20 ? 0 : 1);
+    expect(booked).toBeGreaterThanOrEqual(0);
   });
 
   /**
@@ -306,8 +319,8 @@ describe("expiry sweep", () => {
     // Each order released exactly once — never twice, never not at all.
     expect(px.stockQty).toBe(50);
     expect(py.stockQty).toBe(50);
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(slotAfter.bookedCount).toBe(0);
+    const bookedAfter = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(bookedAfter).toBe(0);
 
     const statuses = await testDb.order.groupBy({ by: ["status"], _count: true });
     expect(statuses.map((s) => s.status).sort()).toEqual(
@@ -383,7 +396,7 @@ describe("expiry sweep", () => {
     const failures = results.filter((r) => r.status >= 500);
     expect(
       failures.map((f) => f.text.slice(0, 160)),
-      "500s here are deadlocks between releaseOrder and book_slot/reserve_stock",
+      "500s here are deadlocks between releaseOrder and book_pickup_window/reserve_stock",
     ).toEqual([]);
 
     // The books still balance: every doomed order gave back exactly what it
@@ -395,18 +408,19 @@ describe("expiry sweep", () => {
     ]);
     expect(px.stockQty).toBe(400 - fresh);
     expect(py.stockQty).toBe(400 - fresh);
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(slotAfter.bookedCount).toBe(fresh);
+    const bookedAfter = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(bookedAfter).toBe(fresh);
   });
 
   /**
    * The same ABBA probe with the NEW lock in the cycle (HANDOFF §46).
    *
-   * The checkout transaction's lock order is now mailbox (advisory) → slot →
-   * products ascending, and `lib/db/release.ts` takes slot → products ascending
-   * with no advisory lock at all. That is only safe while the advisory lock is
-   * taken FIRST: a change that took it after `book_slot` would put two orderings
-   * in the graph and deadlock against a release.
+   * The checkout transaction's lock order is mailbox (advisory) → a
+   * per-window advisory lock inside book_pickup_window() itself → products
+   * ascending, and `lib/db/release.ts` takes only products ascending (there
+   * is no separate pickup-slot row left to lock — releasing a seat is just
+   * setting `seatReleasedAt` on the order row already locked by its own
+   * conditional UPDATE).
    *
    * The test above never contends the advisory lock — every request uses a
    * distinct email. This one crosses every dimension at once: two mailboxes,
@@ -491,11 +505,11 @@ describe("expiry sweep", () => {
     expect(py.stockQty).toBe(400 - reserved);
 
     const [a, b] = await Promise.all([
-      testDb.pickupSlot.findUniqueOrThrow({ where: { id: slotA.id } }),
-      testDb.pickupSlot.findUniqueOrThrow({ where: { id: slotB.id } }),
+      countBookedOrders(slotA.serviceDate, slotA.startTime, slotA.location),
+      countBookedOrders(slotB.serviceDate, slotB.startTime, slotB.location),
     ]);
-    expect(a.bookedCount + b.bookedCount).toBe(reserved);
-    expect(a.bookedCount).toBeLessThanOrEqual(a.capacity);
-    expect(b.bookedCount).toBeLessThanOrEqual(b.capacity);
+    expect(a + b).toBe(reserved);
+    expect(a).toBeLessThanOrEqual(slotA.capacity);
+    expect(b).toBeLessThanOrEqual(slotB.capacity);
   });
 });

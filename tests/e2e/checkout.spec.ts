@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { e2eDb, seedSlot } from "./setup/db";
+import { e2eDb, fillWindow, seedSlot } from "./setup/db";
 import { CATALOG } from "./setup/global-setup";
 import { primeCart, waitForHydration } from "./helpers";
 
@@ -183,10 +183,7 @@ test.describe("checkout", () => {
     // seeded already full. A disappearing option reads as a bug; "— Full" reads
     // as sold out, which is the truth.
     const slot = await seedSlot({ startsInMinutes: 200, capacity: 1, label: "Full Window" });
-    await e2eDb.pickupSlot.update({
-      where: { id: slot.id },
-      data: { bookedCount: 1 },
-    });
+    await fillWindow(slot, 1);
 
     const staple = await productBySlug(CATALOG.staple.slug);
     await primeCart(page, [{ productId: staple.id, qty: 1 }]);
@@ -197,8 +194,6 @@ test.describe("checkout", () => {
     await expect(fullOption).toHaveCount(1);
     await expect(fullOption).toBeDisabled();
     await expect(fullOption).toHaveAccessibleName(/Full$/);
-
-    await e2eDb.pickupSlot.delete({ where: { id: slot.id } });
   });
 });
 
