@@ -23,6 +23,7 @@
     "test:leaks": "vitest run tests/leaks",
     "test:smoke": "vitest run --config vitest.smoke.config.ts",
     "test:staging-payment": "vitest run --config vitest.staging-payment.config.ts",
+    "test:stripe-real": "playwright test --config=playwright.stripe-real.config.ts",
     "sweep:local": "curl -H \"Authorization: Bearer $CRON_SECRET\" localhost:3000/api/cron/sweep",
     "allure:generate": "allure generate allure-results --clean -o allure-report",
     "allure:serve": "allure generate allure-results --clean -o allure-report && allure open -p 3999 allure-report"

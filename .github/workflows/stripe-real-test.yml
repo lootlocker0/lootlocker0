@@ -1,0 +1,114 @@
+name: Stripe Real Test-Mode Checkout
+
+# Drives a real Stripe TEST MODE checkout end-to-end: real PaymentElement,
+# real test card numbers (4242.../3DS/decline), a real webhook delivered by
+# the Stripe CLI's `stripe listen` relay. This is the one thing the ordinary
+# E2E suite structurally cannot do — it runs with no Stripe account at all
+# (docs/HANDOFF.md §20) — and the one thing this project's dev sandbox
+# cannot do either, since it has no network path to api.stripe.com. A
+# GitHub Actions runner has real internet access, which is the whole reason
+# this lives here instead of in ci.yml.
+#
+# workflow_dispatch only — this is a manual, occasional verification run,
+# not something that should fire on every push. It needs two repository
+# secrets that do not exist anywhere else in this project:
+#   STRIPE_TEST_SECRET_KEY        sk_test_... from the Stripe Dashboard,
+#                                  Test mode on.
+#   STRIPE_TEST_PUBLISHABLE_KEY   pk_test_... from the same place.
+# tests/stripe-real/env.ts refuses to run at all if either is unset, and
+# refuses to run if either does NOT start with sk_test_/pk_test_ — a
+# sk_live_ key pasted into this secret by mistake is refused before any
+# server starts, not discovered mid-run.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  stripe-real:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: looplockers
+          POSTGRES_PASSWORD: looplockers_dev
+          POSTGRES_DB: looplockers_stripe_real
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U looplockers"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+
+    env:
+      STRIPE_REAL_DATABASE_URL: postgresql://looplockers:looplockers_dev@localhost:5432/looplockers_stripe_real?sslmode=disable
+      STRIPE_TEST_SECRET_KEY: ${{ secrets.STRIPE_TEST_SECRET_KEY }}
+      STRIPE_TEST_PUBLISHABLE_KEY: ${{ secrets.STRIPE_TEST_PUBLISHABLE_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx playwright install --with-deps chromium
+
+      # Official Stripe apt source — installs the `stripe` CLI binary.
+      - name: Install Stripe CLI
+        run: |
+          curl -s https://packages.stripe.dev/api/security/keypair/stripe-cli-gpg/public \
+            | gpg --dearmor | sudo tee /usr/share/keyrings/stripe.gpg >/dev/null
+          echo "deb [signed-by=/usr/share/keyrings/stripe.gpg] https://packages.stripe.dev/stripe-cli-debian-local stable main" \
+            | sudo tee -a /etc/apt/sources.list.d/stripe.list >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y stripe
+
+      # `stripe listen` opens an OUTBOUND connection to Stripe and relays
+      # webhooks back over it — it does not need this runner to be publicly
+      # reachable, which `next dev --port 3220` on a GitHub Actions runner
+      # never is. Its startup banner prints the per-session signing secret
+      # ("Ready! Your webhook signing secret is whsec_..."); that is
+      # captured here and fed to the Next.js server as
+      # STRIPE_TEST_WEBHOOK_SECRET, so the forwarded request's signature
+      # actually verifies (lib/stripe/webhooks — constructEvent).
+      - name: Start stripe listen, capture webhook secret
+        run: |
+          stripe listen \
+            --api-key "$STRIPE_TEST_SECRET_KEY" \
+            --forward-to localhost:3220/api/webhooks/stripe \
+            --events payment_intent.succeeded \
+            > stripe-listen.log 2>&1 &
+          echo $! > stripe-listen.pid
+          for i in $(seq 1 30); do
+            if grep -q 'whsec_' stripe-listen.log; then break; fi
+            sleep 1
+          done
+          secret=$(grep -oE 'whsec_[A-Za-z0-9]+' stripe-listen.log | head -1)
+          if [ -z "$secret" ]; then
+            echo "::error::stripe listen never printed a webhook secret"
+            cat stripe-listen.log
+            exit 1
+          fi
+          echo "STRIPE_TEST_WEBHOOK_SECRET=$secret" >> "$GITHUB_ENV"
+
+      - name: Real Stripe test-mode checkout
+        run: npm run test:stripe-real
+
+      - name: Stop stripe listen
+        if: always()
+        run: kill "$(cat stripe-listen.pid)" 2>/dev/null || true
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stripe-real-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+            stripe-listen.log
+          retention-days: 14
