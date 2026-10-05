@@ -26,7 +26,6 @@ export function SlotPicker({
     [slots],
   );
   const [selectedDate, setSelectedDate] = useState<string | null>(groups[0]?.dateKey ?? null);
-  const [selectedManualTime, setSelectedManualTime] = useState<string | null>(null);
   const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">("pickup");
   const [pickupLocation, setPickupLocation] = useState("Locker A157");
 
@@ -40,23 +39,6 @@ export function SlotPicker({
   const visibleSlots = effectiveSelectedDate
     ? groups.find((group) => group.dateKey === effectiveSelectedDate)?.slots ?? []
     : [];
-
-  const upcomingDates = useMemo(() => {
-    const today = new Date();
-    return Array.from({ length: 7 }, (_, index) => {
-      const date = new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate() + index));
-      return {
-        key: date.toISOString().slice(0, 10),
-        day: date.getUTCDay(),
-        label: new Intl.DateTimeFormat("en-CA", {
-          timeZone: "UTC",
-          weekday: "short",
-          month: "short",
-          day: "numeric",
-        }).format(date),
-      };
-    }).filter((date) => date.day !== 0 && date.day !== 6);
-  }, []);
 
   return (
     <fieldset>
@@ -124,49 +106,21 @@ export function SlotPicker({
       </p>
 
       {groups.length === 0 ? (
+        // No upcoming windows exist in the database at all — not "none left
+        // today," genuinely nothing published for any future date. This used
+        // to render a set of date/time buttons that only touched local
+        // component state and never called `onChange`, so a shopper could
+        // "pick" a date and time, watch them highlight, and still never be
+        // able to submit: nothing they clicked ever became a real slotId.
+        // There is nothing a real picker can offer here, so say that plainly
+        // instead of faking one.
         <div className="mt-3 border-2 border-warning/60 bg-surface-2 p-4">
           <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-gold">
-            Select your extraction date and time
+            No pickup windows are available right now
           </p>
-          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
-              {upcomingDates.map((date) => (
-              <button
-                key={date.key}
-                type="button"
-                onClick={() => setSelectedDate(date.key)}
-                  aria-pressed={selectedDate === date.key}
-                  className={`border-2 px-3 py-2 text-left font-mono text-xs transition-colors ${
-                    selectedDate === date.key
-                      ? "border-gold bg-gold text-void"
-                      : "border-white/10 text-text-faint hover:border-brand hover:text-text"
-                  }`}
-              >
-                {date.label}
-              </button>
-            ))}
-          </div>
-          <div className="mt-4">
-            <span className="font-mono text-[11px] uppercase tracking-[0.2em] text-text-faint">Time chart</span>
-            <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4" role="list" aria-label="Pickup times">
-              {["7:50 AM", "10:50 AM", "11:20 AM", "2:30 PM"].map((time) => (
-                <button
-                  key={time}
-                  type="button"
-                  onClick={() => setSelectedManualTime(time)}
-                  aria-pressed={selectedManualTime === time}
-                  className={`border px-3 py-2 text-center font-mono text-xs transition-colors ${
-                    selectedManualTime === time
-                      ? "border-gold bg-gold text-void"
-                      : "border-white/10 text-text-faint hover:border-brand hover:text-text"
-                  }`}
-                >
-                  {time}
-                </button>
-              ))}
-            </div>
-          </div>
-          <p className="mt-4 text-sm text-text-dim">
-            Choose a date and time above. Pickup windows become selectable here as soon as the service schedule is published.
+          <p className="mt-2 text-sm text-text-dim">
+            The pickup schedule hasn&apos;t been published for any upcoming date yet. Check back soon, or
+            ask staff when the next windows open.
           </p>
         </div>
       ) : (

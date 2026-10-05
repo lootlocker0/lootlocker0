@@ -61,7 +61,9 @@ export default defineConfig({
   workers: 1,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["allure-playwright", { resultsDir: "allure-results", suiteTitle: false }]]
+    : [["list"], ["allure-playwright", { resultsDir: "allure-results", suiteTitle: false }]],
   timeout: 60_000,
   expect: { timeout: 10_000 },
 

@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { errorResponse } from "@/lib/errors";
-import { serviceDateFloorForToday } from "@/lib/timezone";
+import { serviceDateFloorForToday, slotStartInstant } from "@/lib/timezone";
 
 export const runtime = "nodejs";
 
@@ -29,9 +29,23 @@ export async function GET() {
       orderBy: [{ serviceDate: "asc" }, { startTime: "asc" }],
     });
 
+    // `serviceDate: { gte: today }` only drops past DAYS — a today-dated slot
+    // whose own startTime has already gone by (it's 2pm and there was a
+    // 7:50am window) survives that filter untouched. `POST /api/checkout`
+    // would refuse it with PAST_CUTOFF the moment it was picked
+    // (`slotStartInstant(...) <= Date.now()`), so leaving it in this list is
+    // not a softer rule, just a confusing one: it renders as a normal,
+    // selectable window and only fails once a student has already chosen it.
+    // Filter here with the exact same instant check checkout uses, so a slot
+    // never appears choosable here and then isn't.
+    const now = Date.now();
+    const bookable = slots.filter(
+      (s) => slotStartInstant(s.serviceDate, s.startTime).getTime() > now,
+    );
+
     return Response.json(
       {
-        slots: slots.map((s) => ({
+        slots: bookable.map((s) => ({
           id: s.id,
           label: s.label,
           startTime: s.startTime,

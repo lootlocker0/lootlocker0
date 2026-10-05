@@ -89,6 +89,11 @@ export async function getProducts(
   return readResponse(res);
 }
 
+export async function getSlots(): Promise<ApiResponse> {
+  const res = await fetch(`${BASE_URL}/api/slots`, { cache: "no-store" });
+  return readResponse(res);
+}
+
 export async function runSweep(
   opts: { secret?: string | null } = {},
 ): Promise<ApiResponse> {

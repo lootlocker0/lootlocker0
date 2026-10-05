@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
 import { fileURLToPath } from "url";
+import AllureReporter from "allure-vitest/reporter";
 
 export default defineConfig({
   resolve: {
@@ -32,6 +33,18 @@ export default defineConfig({
       ORDER_SESSION_SECRET: "qa-order-session-secret-value",
     },
     setupFiles: ["tests/setup/global.ts"],
+    // Allure results for `npm run test:unit` / `test:api` land in the same
+    // `allure-results/` directory Playwright's e2e run writes to (result files
+    // are UUID-named, so the two never collide), tagged by which npm script
+    // ran them (`npm_lifecycle_event`) so the combined report can tell a unit
+    // test apart from an API test with the same describe/it name.
+    reporters: [
+      "default",
+      new AllureReporter({
+        resultsDir: "allure-results",
+        globalLabels: [{ name: "suite", value: process.env.npm_lifecycle_event ?? "vitest" }],
+      }),
+    ],
     // Concurrency cases fire 60 real HTTP requests at a `next dev` server that
     // compiles routes on first hit. 30s is not enough for the first test in a
     // cold run.

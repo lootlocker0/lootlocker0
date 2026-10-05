@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { testDb, resetDb } from "../setup/db";
 import {
   checkoutPayload,
+  getSlots,
   postCheckout,
   seedProduct,
   seedSlot,
@@ -163,6 +164,21 @@ describe("money integrity and input tampering", () => {
     expect(ok.status).toBe(200);
     expect(no.status).toBe(409);
     expect(no.body.error.code).toBe("PAST_CUTOFF");
+  });
+
+  it("GET /api/slots never lists a window checkout would refuse as PAST_CUTOFF", async () => {
+    // Same fixture shape as the checkout test above: one slot still ahead,
+    // one already started. A picker built from this response can therefore
+    // never show a window and then have it bounce at submit time.
+    const okSlot = await seedSlotMinutesFromNow(2, 5);
+    const noSlot = await seedSlotMinutesFromNow(-2, 5);
+
+    const res = await getSlots();
+    expect(res.status).toBe(200);
+    const ids = (res.body.slots as { id: string }[]).map((s) => s.id);
+
+    expect(ids).toContain(okSlot.id);
+    expect(ids).not.toContain(noSlot.id);
   });
 
   it("closes a window the instant it starts, on the school's clock, not the server's calendar day", async () => {

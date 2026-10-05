@@ -1,0 +1,142 @@
+name: Production Smoke
+
+# Read-only checks against the REAL deployed site — never the full test
+# suite's destructive paths (ci.yml's `test`/`e2e` jobs already cover those
+# against disposable, ephemeral databases on every push). This workflow makes
+# real HTTPS requests to `vars.PROD_SITE_URL` (the same repository variable
+# `sweep-cron.yml` already uses for the real deployment) and asserts nothing
+# it could not safely assert against a stranger's production site: no
+# checkout, no sign-in attempt, no write of any kind. See the comment at the
+# top of tests/smoke/production.test.ts for the hard rule behind that.
+on:
+  schedule:
+    - cron: "0 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    env:
+      PROD_SITE_URL: ${{ vars.PROD_SITE_URL }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: npx prisma generate
+
+      - name: Production smoke (read-only)
+        run: npm run test:smoke
+
+      - name: Generate Allure report
+        if: always()
+        run: npx allure generate allure-results --clean -o allure-report
+
+      - name: Upload Allure report as a workflow artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report-production-smoke
+          path: allure-report/
+          retention-days: 30
+
+      - name: Upload Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: allure-report/
+
+  publish:
+    needs: smoke
+    if: always()
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    outputs:
+      page_url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  # Emails a short summary + the Pages link to the address the project owner
+  # asked for. A SEPARATE job from `smoke`/`publish`, not a step tacked onto
+  # either: it needs the Pages URL `publish` only has in its outputs, and it
+  # must still fire when the smoke checks themselves fail (`if: always()`) —
+  # a broken production site is exactly the case this email exists to report.
+  notify:
+    needs: [smoke, publish]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download the Allure report
+        uses: actions/download-artifact@v4
+        with:
+          name: allure-report-production-smoke
+          path: allure-report
+
+      # Allure's own summary widget — the same numbers the report's landing
+      # page shows, read here so the email body doesn't need a second source
+      # of truth for pass/fail counts.
+      - name: Read the Allure summary
+        id: summary
+        run: |
+          node -e '
+            const s = require("./allure-report/widgets/summary.json");
+            const st = s.statistic;
+            const lines = [
+              `Total: ${st.total}`,
+              `Passed: ${st.passed}`,
+              `Failed: ${st.failed}`,
+              `Broken: ${st.broken}`,
+              `Skipped: ${st.skipped}`,
+            ];
+            console.log("status=" + (st.failed || st.broken ? "FAILING" : "PASSING"));
+            console.log("body=" + lines.join(" · "));
+          ' >> "$GITHUB_OUTPUT"
+
+      # Resend's plain HTTP API — the same service lib/email.ts already uses
+      # for the welcome email, so this is one Resend account and one
+      # RESEND_API_KEY secret, not a second email integration. Needs
+      # RESEND_API_KEY added as a GitHub Actions repository secret (Settings
+      # → Secrets and variables → Actions) — this step 422s loudly rather than
+      # failing silently if it's missing or the sender domain isn't verified.
+      - name: Email the report summary
+        env:
+          SUMMARY_STATUS: ${{ steps.summary.outputs.status }}
+          SUMMARY_BODY: ${{ steps.summary.outputs.body }}
+          PAGE_URL: ${{ needs.publish.outputs.page_url }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+        run: |
+          curl -sS --fail-with-body https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$(node -e '
+              const status = process.env.SUMMARY_STATUS;
+              const body = process.env.SUMMARY_BODY;
+              const pageUrl = process.env.PAGE_URL;
+              const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+              console.log(JSON.stringify({
+                from: "LootLockers CI <ci@lootlockers.shop>",
+                to: ["lootlocker0@gmail.com"],
+                subject: `Production smoke — ${status}`,
+                text: [
+                  `Production smoke test run: ${status}`,
+                  body,
+                  "",
+                  pageUrl ? `Full Allure report: ${pageUrl}` : "",
+                  `Workflow run: ${runUrl}`,
+                ].filter(Boolean).join("\n"),
+              }));
+            ')"
+
