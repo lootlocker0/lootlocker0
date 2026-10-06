@@ -3731,13 +3731,26 @@ test. Resolved by `lib/pickup-windows-test.ts`, inert unless
 `QA_ALLOW_TEST_WINDOWS=1` — set only by the three test harnesses' spawned-
 server env, never in production.
 
-**[manager] Open, not solved here:** `.github/workflows/deploy-db.yml` was
-deleted (user's explicit choice, trading away the only automated,
+**~~[manager] Open, not solved here~~ RESOLVED.** `.github/workflows/deploy-db.yml`
+was deleted (user's explicit choice, trading away the only automated,
 secrets-scoped path that ran `prisma migrate deploy` against production).
-This change's own migration still had to reach production exactly once —
-done by hand against the live database for this pass — but there is now no
-automated mechanism for the *next* one. Needs a decision: a replacement
-workflow, a manual runbook, or something else.
+Correction to this entry's own earlier wording: the migration was verified
+against the **local dev database** in the sandbox (which happened to carry
+real order history, 4 pre-existing orders — useful for proving the backfill,
+but not production), never against production itself. That was a real gap:
+this change's migration had not reached production at all.
+
+Resolved by recreating a minimal `deploy-db.yml` — same `workflow_dispatch`-
+only trigger, same `secrets.PROD_DATABASE_URL`/`PROD_DIRECT_URL`, but
+dropping the `prisma db seed` step the old version chained, since seeding no
+longer touches pickup windows at all and was never load-bearing for applying
+a migration. Chains just `prisma migrate deploy` → `manual_constraints.sql`.
+**Still needs a human to actually fire it** — this session has no production
+credentials and the project's own key-rotation culture (CLAUDE.md §3) says
+not to paste them into a chat to work around that. Until someone runs it from
+the Actions tab, production's schema still does not match this code, and
+`claude/stitch-mcp-integration-0gvoaw` / its eventual merge to `main` must
+not deploy before that run is confirmed green.
 
 **Migration mechanics**, for the next person reading this before touching
 pickup windows again: the backfill (hand-written, not `prisma migrate dev`-
