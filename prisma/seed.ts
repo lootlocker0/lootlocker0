@@ -55,14 +55,10 @@ const PRODUCT_IMAGES: Record<string, string> = {
   "gatorade-lemon-lime": "/ProductImages/lemon-limegatorade.png",
   "gatorade-orange": "/ProductImages/orangegatorade.png",
   "gatorade-cool-blue": "/ProductImages/bluegatorade.png",
-  "kool-aid-grape":
-    "https://rsq7a9pt5fltxnmn.public.blob.vercel-storage.com/ProductImages/5ac346ca-175f-4a1a-a275-5bcdf946636d.jpg",
-  "kool-aid-cherry":
-    "https://rsq7a9pt5fltxnmn.public.blob.vercel-storage.com/ProductImages/07bb597c-270f-43cf-9be9-26ba5c1a42a7.jpg",
-  "kool-aid-blue-raspberry-lemonade":
-    "https://rsq7a9pt5fltxnmn.public.blob.vercel-storage.com/ProductImages/4e921995-fce2-4b64-891d-1126f5be80a9.jpg",
-  "kool-aid-strawberry-kiwi":
-    "https://rsq7a9pt5fltxnmn.public.blob.vercel-storage.com/ProductImages/215021fc-1b63-4bd3-a179-f5dfb2f155fc.jpg",
+  "kool-aid-grape": "/ProductImages/grapekoolaid.png",
+  "kool-aid-cherry": "/ProductImages/cherrykoolaid.png",
+  "kool-aid-blue-raspberry-lemonade": "/ProductImages/blueraspberrykoolaid.png",
+  "kool-aid-strawberry-kiwi": "/ProductImages/strawberrykiwikoolaid.png",
   "alani-nu": "/ProductImages/alaniNu.png",
   "nutella-sticks": "/ProductImages/nutella-bready.png",
   "minute-maid-juice": "/ProductImages/minutemaid.png",
