@@ -3678,3 +3678,100 @@ a real write+read round trip, and distinct filenames per upload) — the `blob`
 mode itself needs a real Vercel Blob token this harness doesn't have, so it's
 unverified by an automated test; confirm it by hand against the deployed site
 once `BLOB_READ_WRITE_TOKEN` is set.
+
+### 92. [backend] `PickupSlot` removed — production booking was dead, root cause was the seed, not the code
+
+Live incident: `GET /api/slots` was returning nothing bookable in
+production. `prisma/seed.ts` only ever pre-populated a rolling 7-day window
+of `PickupSlot` rows from whenever the seed last ran, and nothing re-ran it
+— the window simply ran out and stayed empty, and checkout dead-ended for
+real students. (A related UX bug, where the empty-state picker rendered fake
+buttons that never produced a real `slotId`, was already fixed and merged —
+`776853e`.)
+
+Rather than add a recurring reseed job (which just relocates the staleness
+problem to "whoever maintains the cron"), removed the failure mode at the
+root: **there is no `PickupSlot` table anymore.** The four daily windows
+(`lib/pickup-windows.ts`) are a fixed in-code template — unchanged content,
+still the placeholder bell schedule pending real sign-off (CLAUDE.md §7),
+only *where* it lives changed. "Today," "tomorrow," etc. are derived live
+from the school's clock every request; "booked" is a live `COUNT(*)` over
+`orders` (`seatReleasedAt IS NULL`), not a stored counter. There is no
+longer a date that can run dry.
+
+`book_slot(text)` → `book_pickup_window(timestamp,text,text,int)` in
+`manual_constraints.sql`: a transaction-scoped `pg_advisory_xact_lock` keyed
+on `(service_date, start_time, location)` stands in for the row lock
+`book_slot()` had, closing the same TOCTOU race the same way — reused the
+exact primitive already sitting three lines above the old call in
+`app/api/checkout/route.ts` (the daily-spend-cap advisory lock), not a new
+technique for this codebase. `Order` gained a pickup-window snapshot
+(`pickupLabel`/`pickupStartTime`/`pickupLocation`/`pickupServiceDate` — same
+philosophy as `OrderItem`'s snapshot, CLAUDE.md §2.5) and `seatReleasedAt`
+(replaces the `bookedCount` decrement; backstopped by a new
+`seat_released_only_when_terminal` CHECK). This also deleted the
+slot-vs-checkout lock-ordering concern in `lib/db/release.ts` and the admin
+refund route outright — there is no second row left for either to take a
+lock against.
+
+**Known, accepted gap:** no way to represent a one-off blackout (snow day,
+a cancelled window for one date) without re-introducing some kind of
+exception data — confirmed no admin control over slot state existed before
+this change either (`active` was only ever set by the seed upsert, never by
+any route). Flagged as a possible fast-follow, not built: a tiny reactive
+`BlockedWindow(serviceDate, startTime, location)` table, written only when
+staff actually block one, would not reintroduce the staleness problem since
+it is never pre-seeded.
+
+**Test-only addition, not production:** `test_pickup_windows` — a table
+that exists ONLY in a test database (created by each suite's own
+`prepareSchema()`, never a `prisma/schema.prisma` model or migration) so
+`seedSlot()` can still declare an isolated, arbitrary-capacity window per
+test. Resolved by `lib/pickup-windows-test.ts`, inert unless
+`QA_ALLOW_TEST_WINDOWS=1` — set only by the three test harnesses' spawned-
+server env, never in production.
+
+**~~[manager] Open, not solved here~~ RESOLVED.** `.github/workflows/deploy-db.yml`
+was deleted (user's explicit choice, trading away the only automated,
+secrets-scoped path that ran `prisma migrate deploy` against production).
+Correction to this entry's own earlier wording: the migration was verified
+against the **local dev database** in the sandbox (which happened to carry
+real order history, 4 pre-existing orders — useful for proving the backfill,
+but not production), never against production itself. That was a real gap:
+this change's migration had not reached production at all.
+
+Resolved by recreating a minimal `deploy-db.yml` — same `workflow_dispatch`-
+only trigger, same `secrets.PROD_DATABASE_URL`/`PROD_DIRECT_URL`, but
+dropping the `prisma db seed` step the old version chained, since seeding no
+longer touches pickup windows at all and was never load-bearing for applying
+a migration. Chains just `prisma migrate deploy` → `manual_constraints.sql`.
+**Still needs a human to actually fire it** — this session has no production
+credentials and the project's own key-rotation culture (CLAUDE.md §3) says
+not to paste them into a chat to work around that. Until someone runs it from
+the Actions tab, production's schema still does not match this code, and
+`claude/stitch-mcp-integration-0gvoaw` / its eventual merge to `main` must
+not deploy before that run is confirmed green.
+
+**Migration mechanics**, for the next person reading this before touching
+pickup windows again: the backfill (hand-written, not `prisma migrate dev`-
+generated, since adding `NOT NULL` columns to a populated `orders` table
+needs one) resolves every existing order's snapshot from the `pickup_slots`
+row its `slot_id` pointed at, before the table is dropped. `seatReleasedAt`
+is backfilled `now()` for every pre-migration `CANCELLED`/`EXPIRED` order
+(their release was always unconditional) and left `NULL` ("still held") for
+every pre-migration `REFUNDED` order — the old schema recorded a refund's
+seat-release choice only as an ephemeral decrement to a shared counter,
+never per-order, so it cannot be reconstructed. `NULL` can only ever
+overcount a closed day's seats (invisible — a past day's windows are never
+re-evaluated), never undercount into a future oversell.
+
+**Verified:** ran against a real Postgres database already carrying order
+history (4 pre-existing orders) — migration applied clean, backfill
+confirmed by direct query, `book_pickup_window()` sanity-checked by hand
+against the seeded data. Full suite re-run: 54 unit + 53 API + 107
+concurrency + 5 ratelimit + 26 leaks, all green, including every refund/
+sweep/webhook race that used to read `PickupSlot.bookedCount` (rewritten to
+a live order count) and two new tests in `tests/concurrency/slot.test.ts` —
+a direct race against `book_pickup_window()` on a synthetic tuple, and a
+checkout-level integration test against one real, almost-full template
+window. `docs/API-CONTRACT.md` and `CLAUDE.md` §2.4 updated to match.

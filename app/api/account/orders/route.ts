@@ -61,14 +61,10 @@ export async function GET(req: NextRequest) {
         totalCents: true,
         paidAt: true,
         createdAt: true,
-        slot: {
-          select: {
-            label: true,
-            startTime: true,
-            location: true,
-            serviceDate: true,
-          },
-        },
+        pickupLabel: true,
+        pickupStartTime: true,
+        pickupLocation: true,
+        pickupServiceDate: true,
         items: {
           select: {
             productId: true,
@@ -85,13 +81,28 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       {
-        orders: orders.map(({ pickupCode, ...order }) => ({
-          ...order,
-          // Present only when the order is actually claimable — omitted, not
-          // null, so a UI that renders truthiness cannot show an empty
-          // locker code box. See CODE_VISIBLE_STATUSES above.
-          ...(CODE_VISIBLE_STATUSES.has(order.status) ? { pickupCode } : {}),
-        })),
+        orders: orders.map(
+          ({
+            pickupCode,
+            pickupLabel,
+            pickupStartTime,
+            pickupLocation,
+            pickupServiceDate,
+            ...order
+          }) => ({
+            ...order,
+            slot: {
+              label: pickupLabel,
+              startTime: pickupStartTime,
+              location: pickupLocation,
+              serviceDate: pickupServiceDate,
+            },
+            // Present only when the order is actually claimable — omitted, not
+            // null, so a UI that renders truthiness cannot show an empty
+            // locker code box. See CODE_VISIBLE_STATUSES above.
+            ...(CODE_VISIBLE_STATUSES.has(order.status) ? { pickupCode } : {}),
+          }),
+        ),
       },
       { headers: { "Cache-Control": "no-store" } },
     );

@@ -72,6 +72,9 @@ export function serverEnv(): Record<string, string> {
     NODE_ENV: "development", // same Secure-cookie-over-http reasoning as tests/e2e/setup/env.ts
     DATABASE_URL: STRIPE_REAL_DATABASE_URL,
     DIRECT_URL: STRIPE_REAL_DATABASE_URL,
+    // Lets seedSlot() (tests/stripe-real/db.ts) declare an isolated test
+    // window — see lib/pickup-windows-test.ts. Never set in production.
+    QA_ALLOW_TEST_WINDOWS: "1",
     STRIPE_SECRET_KEY: STRIPE_TEST_SECRET_KEY,
     STRIPE_WEBHOOK_SECRET: STRIPE_TEST_WEBHOOK_SECRET,
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: STRIPE_TEST_PUBLISHABLE_KEY,

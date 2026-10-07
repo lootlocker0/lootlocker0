@@ -50,7 +50,7 @@ const ADMIN_ORDER_SELECT = {
   paidAt: true,
   expiresAt: true,
   createdAt: true,
-  slotId: true,
+  seatReleasedAt: true,
   stripePaymentIntentId: true,
   items: {
     select: {

@@ -8,6 +8,8 @@ import { orderNumber, pickupCode, withRetryOnUnique } from "@/lib/codes";
 import { rateLimit } from "@/lib/rate-limit";
 import { logEvent, hashPii } from "@/lib/log";
 import { schoolDayStartInstant, slotStartInstant } from "@/lib/timezone";
+import { findPickupWindow } from "@/lib/pickup-windows";
+import { findTestWindow } from "@/lib/pickup-windows-test";
 import { createOrderPaymentIntent } from "@/lib/stripe/payments";
 import { getAccountUser } from "@/lib/account-auth";
 import { releaseOrder } from "@/lib/db/release";
@@ -26,11 +28,12 @@ export const dynamic = "force-dynamic";
 //   1. validate            reject before touching anything
 //   2. rate limit          per IP and per email
 //   3. reprice from the DB the client's total is evidence, never input
-//   4. slot-time check     reject a slot whose start time has already passed,
-//                          in the school's timezone, not the server's — no
-//                          advance-notice cutoff beyond that
+//   4. window-time check   reject a window whose start time has already
+//                          passed, in the school's timezone, not the
+//                          server's — no advance-notice cutoff beyond that
 //   5. TRANSACTION         advisory lock (email+day) -> daily spend cap
-//                          -> book_slot -> reserve_stock (sorted) -> create order
+//                          -> book_pickup_window -> reserve_stock (sorted)
+//                          -> create order
 //   6. payment             cash is already done; card opens a PaymentIntent
 //
 // Alongside 1-2, not a numbered step of its own because it gates nothing: a
@@ -160,24 +163,24 @@ export async function POST(req: NextRequest) {
     const startOfDay = schoolDayStartInstant();
 
     // No advance-notice cutoff (e.g. no "must order 45 minutes ahead" rule) —
-    // customers can place an order right up until a slot's own start time.
-    // What is NOT optional is rejecting a slot whose start time has already
-    // passed: nothing else in this codebase ever deactivates a slot once its
-    // window opens (`active` is a manual staff/seed flag, not a clock), and
-    // `GET /api/slots` only filters by calendar day, so a stale tab or a
-    // replayed request with this morning's slotId would otherwise still
+    // customers can place an order right up until a window's own start time.
+    // What is NOT optional is rejecting a window whose start time has already
+    // passed: `GET /api/slots` only filters by calendar day, so a stale tab or
+    // a replayed request with this morning's slotId would otherwise still
     // reserve a seat, decrement stock, and charge a card for a pickup that
     // already happened.
-    const slot = await db.pickupSlot.findUnique({
-      where: { id: input.slotId },
-      select: { id: true, active: true, serviceDate: true, startTime: true },
-    });
-    // A missing or deactivated slot is reported as SLOT_FULL rather than as a
-    // 404: the student's next move is identical (refetch the slot list and pick
-    // another window), and an id-probing response that distinguishes "no such
-    // slot" from "full" tells a scraper more than it tells a student.
-    if (!slot || !slot.active) throw new AppError("SLOT_FULL");
-    if (slotStartInstant(slot.serviceDate, slot.startTime).getTime() <= Date.now()) {
+    const now = new Date();
+    // findTestWindow is a no-op in production (see lib/pickup-windows-test.ts)
+    // — it only ever resolves something when the test harness's own server
+    // env opted in.
+    const window = (await findTestWindow(input.slotId)) ?? findPickupWindow(input.slotId, now);
+    // A missing window (bad id, or outside today..+N school days) is reported
+    // as SLOT_FULL rather than as a 404: the student's next move is identical
+    // (refetch the slot list and pick another window), and an id-probing
+    // response that distinguishes "no such window" from "full" tells a
+    // scraper more than it tells a student.
+    if (!window) throw new AppError("SLOT_FULL");
+    if (slotStartInstant(window.serviceDate, window.startTime).getTime() <= now.getTime()) {
       throw new AppError("PAST_CUTOFF");
     }
 
@@ -209,11 +212,12 @@ export async function POST(req: NextRequest) {
           // lock is granted) always sees the previous holder's committed order.
           // Nothing to unlock by hand, and nothing leaks if this process dies.
           //
-          // Taken FIRST, before book_slot and reserve_stock, for two reasons:
-          // the cap is the cheapest failure and should not cost a seat and a
-          // stock decrement to discover, and taking it before any row lock keeps
-          // one global lock order (mailbox → slot → products ascending) that
-          // cannot deadlock against lib/db/release.ts.
+          // Taken FIRST, before book_pickup_window and reserve_stock, for two
+          // reasons: the cap is the cheapest failure and should not cost a
+          // seat and a stock decrement to discover, and taking it before any
+          // other lock keeps one global lock order (mailbox → window →
+          // products ascending) that cannot deadlock against
+          // lib/db/release.ts.
           //
           // It serialises one mailbox on one day and nothing else. Two different
           // students hash to different keys and never wait on each other, so
@@ -242,19 +246,25 @@ export async function POST(req: NextRequest) {
             throw new AppError("SPEND_CAP_EXCEEDED", { capCents: cap, spentCents });
           }
 
-          // Atomic slot booking. The WHERE clause does the capacity check in the
-          // same statement as the write — an app-level `if (booked < capacity)`
-          // reads outside the lock and loses this race every time.
-          const slotRows = await tx.$queryRaw<{ ok: boolean }[]>`
-            SELECT book_slot(${input.slotId}::text) AS ok
+          // Atomic window booking. There is no row to lock — capacity comes
+          // from the server-resolved template above, "booked" is a live count
+          // over `orders` — so this is serialised by a transaction-scoped
+          // advisory lock instead of a row lock. See the comment on
+          // book_pickup_window() in manual_constraints.sql for why that closes
+          // the same race a single UPDATE ... WHERE would.
+          const windowRows = await tx.$queryRaw<{ ok: boolean }[]>`
+            SELECT book_pickup_window(
+              ${window.serviceDate}::timestamp, ${window.startTime}::text,
+              ${window.location}::text, ${window.capacity}::int
+            ) AS ok
           `;
-          if (slotRows[0]?.ok !== true) throw new AppError("SLOT_FULL");
+          if (windowRows[0]?.ok !== true) throw new AppError("SLOT_FULL");
 
           // Atomic stock reservation, one product at a time, ascending by id.
           // The sort is load-bearing: it fixes the order in which row locks are
           // taken, so two carts holding the same two products cannot deadlock by
           // approaching them from opposite ends. lib/db/release.ts follows the
-          // same order (slot first, then products ascending) for the same reason.
+          // same order (products ascending) for the same reason.
           for (const l of [...lines].sort((a, b) =>
             a.productId.localeCompare(b.productId),
           )) {
@@ -282,7 +292,10 @@ export async function POST(req: NextRequest) {
               // slot logic above, and this transaction behaves identically
               // whether or not it's set.
               userId: accountUser?.id ?? null,
-              slotId: input.slotId,
+              pickupLabel: window.label,
+              pickupStartTime: window.startTime,
+              pickupLocation: window.location,
+              pickupServiceDate: window.serviceDate,
               paymentMethod: input.paymentMethod,
               // DELTA FROM backend.md §3, which creates every order PENDING and
               // then updates cash orders to RESERVED after the transaction

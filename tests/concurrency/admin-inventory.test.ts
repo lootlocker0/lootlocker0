@@ -10,6 +10,7 @@ import {
   checkoutPayload,
   inventoryCookie,
   inventoryRequest,
+  countBookedOrders,
   postCheckout,
   postWebhook,
   runSweep,
@@ -46,9 +47,11 @@ describe("P4 refund — the race backend flagged as the highest-value untested c
     const stockBefore = (
       await testDb.product.findUniqueOrThrow({ where: { id: order.items[0].productId } })
     ).stockQty;
-    const slotBefore = (
-      await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })
-    ).bookedCount;
+    const slotBefore = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
 
     const [manual, hook] = await Promise.all([
       adminPost(`/api/admin/orders/${order.orderNumber}/refund`, cookie, {}),
@@ -69,18 +72,22 @@ describe("P4 refund — the race backend flagged as the highest-value untested c
     expect(stockAfter).toBe(stockBefore);
 
     // The seat was not asked for, so it must not move on either path.
-    const slotAfter = (
-      await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })
-    ).bookedCount;
+    const slotAfter = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
     expect(slotAfter).toBe(slotBefore);
   });
 
   it("fifteen simultaneous refunds change the order exactly once", async () => {
     const cookie = await adminCookie();
     const order = await seedPaidOrder();
-    const slotBefore = (
-      await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })
-    ).bookedCount;
+    const slotBefore = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
 
     const results = await Promise.all(
       Array.from({ length: 15 }, () =>
@@ -96,9 +103,11 @@ describe("P4 refund — the race backend flagged as the highest-value untested c
     // entirely would still return REFUNDED to every caller (HANDOFF §57).
     expect(changed).toHaveLength(1);
 
-    const slotAfter = (
-      await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })
-    ).bookedCount;
+    const slotAfter = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
     expect(slotAfter, "the seat was released more than once").toBe(slotBefore - 1);
   });
 
@@ -194,9 +203,9 @@ describe("P4 refund — the race backend flagged as the highest-value untested c
 
     // Nothing may leave the database inconsistent either.
     for (const slot of [slotA, slotB]) {
-      const s = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-      expect(s.bookedCount).toBeGreaterThanOrEqual(0);
-      expect(s.bookedCount).toBeLessThanOrEqual(s.capacity);
+      const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+      expect(booked).toBeGreaterThanOrEqual(0);
+      expect(booked).toBeLessThanOrEqual(slot.capacity);
     }
     for (const p of [p1, p2]) {
       const row = await testDb.product.findUniqueOrThrow({ where: { id: p.id } });

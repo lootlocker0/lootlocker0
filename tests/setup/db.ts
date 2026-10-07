@@ -2,6 +2,7 @@ import { execSync } from "child_process";
 import { PrismaClient } from "@prisma/client";
 import { PrismaPg } from "@prisma/adapter-pg";
 import { TEST_DATABASE_URL } from "./env";
+import { TEST_PICKUP_WINDOWS_DDL } from "../fixtures/test-pickup-windows-ddl";
 
 /**
  * Real Postgres. Not SQLite, not a mock (qa.md §1).
@@ -43,6 +44,12 @@ export function prepareSchema(): void {
     `psql "${TEST_DATABASE_URL}" -v ON_ERROR_STOP=1 -f prisma/migrations/manual_constraints.sql`,
     { env, stdio: "pipe" },
   );
+  // Test-only, NOT a production table (not in prisma/schema.prisma or any
+  // migration) — see lib/pickup-windows-test.ts for why this suite needs it.
+  execSync(
+    `psql "${TEST_DATABASE_URL}" -v ON_ERROR_STOP=1 -c "${TEST_PICKUP_WINDOWS_DDL}"`,
+    { env, stdio: "pipe" },
+  );
 }
 
 /**
@@ -61,7 +68,7 @@ export async function resetDb(): Promise<void> {
   // real Google credentials this harness does not have), so nothing ever
   // writes a row there.
   await testDb.$executeRawUnsafe(
-    `TRUNCATE order_items, orders, webhook_events, products, pickup_slots, users RESTART IDENTITY CASCADE`,
+    `TRUNCATE order_items, orders, webhook_events, products, test_pickup_windows, users RESTART IDENTITY CASCADE`,
   );
 }
 

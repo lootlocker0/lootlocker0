@@ -24,19 +24,13 @@ export function SlotSection({
 
   return (
     <div className="admin-page-break">
-      <AngledPanel
-        as="section"
-        variant="panel"
-        tone={3}
-        border={slot.active ? "brand" : "none"}
-        className="mb-4"
-      >
+      <AngledPanel as="section" variant="panel" tone={3} border="brand" className="mb-4">
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h3 className="font-display text-headline-md uppercase text-text">
             {formatSlotTime(slot.startTime)} · {slot.label}
-            {!slot.active && (
+            {slot.capacity === null && (
               <span className="ml-3 border-2 border-danger px-2 py-0.5 align-middle font-mono text-[11px] text-danger">
-                INACTIVE — orders still valid
+                NOT IN CURRENT SCHEDULE
               </span>
             )}
           </h3>
@@ -47,7 +41,9 @@ export function SlotSection({
           <div>
             <dt className="text-text-faint">Booked</dt>
             <dd className="text-text">
-              {slot.bookedCount}/{slot.capacity} ({slot.remaining} left)
+              {slot.capacity === null
+                ? `${slot.bookedCount} booked (capacity unknown)`
+                : `${slot.bookedCount}/${slot.capacity} (${slot.remaining} left)`}
             </dd>
           </div>
           <div>

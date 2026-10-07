@@ -114,16 +114,12 @@ export async function GET(
         createdAt: true,
         // Explicit projection, not `include`. studentName/email/phone/homeroom
         // are absent on purpose and a column added later cannot leak by default.
-        slot: {
-          select: {
-            label: true,
-            startTime: true,
-            location: true,
-            serviceDate: true,
-            // Not capacity, not bookedCount. Those never leave the server
-            // (same rule as GET /api/slots).
-          },
-        },
+        // Not capacity, not a booked count. Those never leave the server
+        // (same rule as GET /api/slots).
+        pickupLabel: true,
+        pickupStartTime: true,
+        pickupLocation: true,
+        pickupServiceDate: true,
         items: {
           select: {
             productId: true,
@@ -165,7 +161,12 @@ export async function GET(
         // stock and the seat runs out. Poll until then, not forever.
         expiresAt: order.expiresAt,
         placedAt: order.createdAt,
-        slot: order.slot,
+        slot: {
+          label: order.pickupLabel,
+          startTime: order.pickupStartTime,
+          location: order.pickupLocation,
+          serviceDate: order.pickupServiceDate,
+        },
         // Snapshots, never the live product (CLAUDE.md §2.5). `allergensSnapshot`
         // is returned in full and must be rendered in full — this is the
         // confirmation surface CLAUDE.md §2.8 is written about.

@@ -46,10 +46,13 @@ export type AdminSlot = {
   startTime: string;
   location: string;
   serviceDate: string;
-  active: boolean;
-  capacity: number;
+  // null only for a window whose (startTime, location) no longer exists in
+  // the current template — a historical day the schedule has since changed
+  // under. There is no PickupSlot table/`active` flag anymore; a window is
+  // either in the fixed template or it isn't.
+  capacity: number | null;
   bookedCount: number;
-  remaining: number;
+  remaining: number | null;
   counts: {
     total: number;
     listed: number;

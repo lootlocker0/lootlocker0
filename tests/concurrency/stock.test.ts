@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { testDb, resetDb } from "../setup/db";
-import { seedSlot, seedProduct, checkoutPayload, postCheckout } from "../helpers";
+import { seedSlot, seedProduct, checkoutPayload, postCheckout, countBookedOrders } from "../helpers";
 
 describe("stock under concurrent load", () => {
   beforeEach(resetDb);
@@ -33,8 +33,8 @@ describe("stock under concurrent load", () => {
 
     // The 14 losers each claimed a seat before failing on stock. Every one of
     // those seats must have rolled back with its transaction.
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(slotAfter.bookedCount).toBe(1);
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(booked).toBe(1);
   });
 
   it("rolls back the slot booking when a later line is out of stock", async () => {
@@ -56,9 +56,9 @@ describe("stock under concurrent load", () => {
     expect(r.body.error.code).toBe("OUT_OF_STOCK");
 
     // The critical assertion: partial failure must leave NOTHING behind.
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
     const stockAfter = await testDb.product.findUniqueOrThrow({ where: { id: inStock.id } });
-    expect(slotAfter.bookedCount).toBe(0);
+    expect(booked).toBe(0);
     expect(stockAfter.stockQty).toBe(10);
     expect(await testDb.order.count()).toBe(0);
     expect(await testDb.orderItem.count()).toBe(0);
@@ -102,8 +102,8 @@ describe("stock under concurrent load", () => {
     expect(r.body.error.code).toBe("OUT_OF_STOCK");
     const stockAfter = await testDb.product.findUniqueOrThrow({ where: { id: inStock.id } });
     expect(stockAfter.stockQty).toBe(7);
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
-    expect(slotAfter.bookedCount).toBe(0);
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
+    expect(booked).toBe(0);
   });
 
   /**
@@ -262,9 +262,9 @@ describe("stock under concurrent load", () => {
 
     const orders = await testDb.order.count();
     const after = await testDb.product.findUniqueOrThrow({ where: { id: product.id } });
-    const slotAfter = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } });
+    const booked = await countBookedOrders(slot.serviceDate, slot.startTime, slot.location);
     expect(after.stockQty).toBe(1000 - orders);
-    expect(slotAfter.bookedCount).toBe(orders);
+    expect(booked).toBe(orders);
 
     expect(
       { byStatus, sample: fiveHundreds[0]?.text?.slice(0, 300) },

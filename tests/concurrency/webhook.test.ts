@@ -3,6 +3,7 @@ import { testDb, resetDb } from "../setup/db";
 import {
   chargeRefunded,
   confirmationsSentFor,
+  countBookedOrders,
   countLogEvent,
   paymentIntentFailed,
   paymentIntentSucceeded,
@@ -180,7 +181,7 @@ describe("webhook idempotency", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(20);
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      (await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation)),
     ).toBe(0);
 
     // A second failure event, different id, must restock nothing.
@@ -342,7 +343,7 @@ describe("webhook idempotency", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(19);
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      (await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation)),
     ).toBe(1);
 
     await postWebhook(chargeRefunded(order.stripePaymentIntentId!, "evt_refund_pending"));
@@ -351,13 +352,17 @@ describe("webhook idempotency", () => {
     expect(after.status).toBe("REFUNDED");
 
     const stock = await testDb.product.findUniqueOrThrow({ where: { id: productId } });
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
     console.log(
       `[refund on PENDING] status=${after.status} stock=${stock.stockQty}/20 ` +
-        `bookedCount=${slot.bookedCount} expiresAt=${after.expiresAt}`,
+        `booked=${booked} expiresAt=${after.expiresAt}`,
     );
     expect(stock.stockQty).toBe(19); // still held
-    expect(slot.bookedCount).toBe(1); // seat still consumed
+    expect(booked).toBe(1); // seat still consumed
 
     // And nothing later frees them either: the sweep only looks at PENDING card
     // orders with an expiry, and the refund cleared the expiry. The hold is
@@ -368,7 +373,7 @@ describe("webhook idempotency", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(19);
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      (await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation)),
     ).toBe(1);
     expect(
       (await testDb.order.findUniqueOrThrow({ where: { id: order.id } })).status,
@@ -392,8 +397,12 @@ describe("webhook idempotency", () => {
     expect(stock.stockQty).toBe(before.stockQty); // staff adjusts manually
 
     // Documented consequence (HANDOFF §21): the pickup seat is NOT freed.
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
-    expect(slot.bookedCount).toBe(1);
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
+    expect(booked).toBe(1);
   });
 
   /**
@@ -415,9 +424,11 @@ describe("webhook idempotency", () => {
       const stockBefore = await testDb.product.findUniqueOrThrow({
         where: { id: order.items[0].productId },
       });
-      const slotBefore = await testDb.pickupSlot.findUniqueOrThrow({
-        where: { id: order.slotId },
-      });
+      const bookedBefore = await countBookedOrders(
+        order.pickupServiceDate,
+        order.pickupStartTime,
+        order.pickupLocation,
+      );
 
       const r = await postWebhook(
         chargeRefunded(order.stripePaymentIntentId!, `evt_refund_from_${status}`),
@@ -431,9 +442,8 @@ describe("webhook idempotency", () => {
         (await testDb.product.findUniqueOrThrow({ where: { id: stockBefore.id } })).stockQty,
       ).toBe(stockBefore.stockQty);
       expect(
-        (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: slotBefore.id } }))
-          .bookedCount,
-      ).toBe(slotBefore.bookedCount);
+        await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation),
+      ).toBe(bookedBefore);
 
       // Idempotent: a second refund event for the same charge matches nothing.
       const second = await postWebhook(
@@ -470,7 +480,7 @@ describe("webhook idempotency", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(20); // released by the decline
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      (await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation)),
     ).toBe(0);
 
     await postWebhook(chargeRefunded(pi, "evt_refund_after_decline"));
@@ -488,7 +498,7 @@ describe("webhook idempotency", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(20);
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      (await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation)),
     ).toBe(0);
   });
 

@@ -88,6 +88,10 @@ export function serverEnv(): Record<string, string> {
     TZ: SERVER_TZ,
     DATABASE_URL: E2E_DATABASE_URL,
     DIRECT_URL: E2E_DATABASE_URL,
+    // Lets seedSlot() (tests/e2e/setup/db.ts) declare an isolated,
+    // arbitrary-capacity test window — see lib/pickup-windows-test.ts.
+    // Never set in production.
+    QA_ALLOW_TEST_WINDOWS: "1",
     STRIPE_SECRET_KEY: "sk_test_placeholder",
     STRIPE_WEBHOOK_SECRET,
     NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY: "pk_test_placeholder",

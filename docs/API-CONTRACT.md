@@ -186,21 +186,29 @@ These are the field names the API will use. They match the Prisma models.
 }
 ```
 
-### PickupSlot (as returned to students)
+### Pickup window (as returned to students)
+
+There is no `PickupSlot` database table. The four daily windows
+(times/locations/capacities) are a fixed in-code template
+(`lib/pickup-windows.ts`); "today," "tomorrow," etc. are derived live from the
+school's clock, never pre-seeded. "How many seats are taken" is a live count
+over `Order` rows (`seatReleasedAt IS NULL`), not a stored counter. `id` is a
+composite string (`serviceDate|startTime|location`), opaque to the client.
 
 ```jsonc
 {
-  "id": "cmtkq00ka000fwf7dsn6icbmt",
+  "id": "2026-09-02|12:20|Locker bank C",
   "label": "Lunch B",
   "startTime": "12:20",                       // local wall clock, 24h
   "location": "Locker bank C",
   "serviceDate": "2026-09-02T00:00:00.000Z",
-  "remaining": 17,                            // capacity - bookedCount, floored at 0
+  "remaining": 17,                            // capacity - live booked count, floored at 0
   "full": false
 }
 ```
 
-`capacity` and `bookedCount` are internal; students see `remaining` and `full`.
+`capacity` and the live booked count are internal; students see `remaining`
+and `full`.
 
 ### Order / OrderItem
 
@@ -253,14 +261,12 @@ nothing leaks if a process dies mid-checkout.
 
 | Object | Contract |
 |---|---|
-| `book_slot(text) -> boolean` | Claims one seat. `true` = claimed, `false` = full, inactive, or missing |
+| `book_pickup_window(timestamp, text, text, int) -> boolean` | Checks whether a pickup window has a free seat, serialized per `(service_date, start_time, location)` by a transaction-scoped `pg_advisory_xact_lock` (there is no row to lock — capacity is supplied by the caller from `lib/pickup-windows.ts`'s template). `true` = the caller may insert an order holding this seat, `false` = full. The caller's `orders` INSERT must happen inside the SAME transaction, before commit |
 | `reserve_stock(text, int) -> boolean` | Reserves N units. `true` = reserved, `false` = insufficient stock, inactive, or missing. A non-positive quantity returns `false` |
 | `adjust_stock(text, int) -> int` | **P4.** Applies a signed delta to stock and returns the new `stock_qty`, or `NULL` if the product is missing or the change would go below zero. Ignores `active` (staff must be able to correct a deactivated product). A zero delta returns `NULL` |
 | `stock_non_negative` | `products.stock_qty >= 0` |
 | `product_price_non_negative` | `products.price_cents >= 0` |
-| `booked_count_non_negative` | `pickup_slots.booked_count >= 0` |
-| `slot_capacity_non_negative` | `pickup_slots.capacity >= 0` |
-| `booked_within_capacity` | `pickup_slots.booked_count <= capacity` |
+| `seat_released_only_when_terminal` | `orders.seat_released_at IS NULL OR status IN ('CANCELLED','EXPIRED','REFUNDED')` |
 | `order_amounts_non_negative` | all three order amounts `>= 0` |
 | `order_total_consistent` | `total_cents = subtotal_cents + tax_cents` |
 | `order_item_qty_positive` | `order_items.qty > 0` |
@@ -441,14 +447,16 @@ Bookable pickup windows from today forward, with live remaining capacity.
 }
 ```
 
-Ordered by `serviceDate` ascending, then `startTime` ascending. Inactive slots
-and slots whose service date has passed are omitted entirely.
+Ordered by `serviceDate` ascending, then `startTime` ascending. A window
+whose own start time has already passed is omitted entirely (there is no
+`active` flag anymore — a window is either in the template, for a day that
+hasn't started yet, or it isn't listed).
 
-`capacity` and `bookedCount` are **not** in the payload and will not be added.
-The client gets `remaining` (`capacity - bookedCount`, floored at 0) and `full`.
-Anything that needs to know whether a seat is available asks for the seat —
-`book_slot()` inside the checkout transaction — rather than comparing two
-numbers it read earlier (CLAUDE.md §2.4).
+`capacity` and the live booked count are **not** in the payload and will not
+be added. The client gets `remaining` (`capacity - booked`, floored at 0) and
+`full`. Anything that needs to know whether a seat is available asks for the
+seat — `book_pickup_window()` inside the checkout transaction — rather than
+comparing two numbers it read earlier (CLAUDE.md §2.4).
 
 `startTime` is a local wall clock (`"HH:MM"`, 24h), not a timestamp. Render it
 as-is. `serviceDate` is midnight of the service day; show the date from it, and
@@ -500,7 +508,7 @@ Stripe PaymentIntent.
 | `email` | string | yes | Trimmed and **lower-cased server-side** before anything uses it. Max 160. Must be a valid address |
 | `phone` | string | yes | Trimmed. `^\+?[\d\s()-]{10,20}$` — digits, spaces, brackets, dashes, optional leading `+` |
 | `homeroom` | string | no | Trimmed. Max 20 |
-| `slotId` | cuid | yes | From `GET /api/slots` |
+| `slotId` | string | yes | A pickup-window id from `GET /api/slots` — a composite string, not a database row id (there is no `PickupSlot` table) |
 | `paymentMethod` | `CARD` \| `CASH_AT_PICKUP` | yes | Both are live |
 | `items` | array | yes | 1–20 lines |
 | `items[].productId` | cuid | yes | From `GET /api/products` |
@@ -513,7 +521,7 @@ Stripe PaymentIntent.
   "email": "cash.tester@example.com",
   "phone": "(604) 555-0134",
   "homeroom": "9B",
-  "slotId": "cmtkqayye000q5p7dxg1ygklo",
+  "slotId": "2026-09-02|12:50|Main hall table",
   "paymentMethod": "CASH_AT_PICKUP",
   "items": [
     { "productId": "cmtkqayvk00005p7dl2izvtyt", "qty": 2 },
@@ -580,8 +588,8 @@ until its status flips.
 | `RATE_LIMITED` | 429 | More than 10 attempts/min from one IP, or 5/min for one email | Wait, then allow one retry. Do not auto-retry in a loop |
 | `PRODUCT_UNAVAILABLE` | 409 | A `productId` does not exist or the product was deactivated | Refetch the catalog and rebuild the cart |
 | `SPEND_CAP_EXCEEDED` | 409 | This order would push the address past the daily cap. `capCents`, `spentCents` | Terminal for today. Show both numbers |
-| `SLOT_FULL` | 409 | The window filled, was deactivated, or does not exist | Refetch `GET /api/slots` and pick again. **Recoverable** |
-| `PAST_CUTOFF` | 409 | Now is later than `slotStart - order_cutoff_minutes`. Checked **before** the spend cap: a closed window is refused whether or not the student also has budget left | Refetch slots; that window is closed. Another may not be |
+| `SLOT_FULL` | 409 | The window filled or does not resolve to a real template window | Refetch `GET /api/slots` and pick again. **Recoverable** |
+| `PAST_CUTOFF` | 409 | Now is later than the window's own start time — no advance-notice buffer. Checked **before** the spend cap: a closed window is refused whether or not the student also has budget left | Refetch slots; that window is closed. Another may not be |
 | `OUT_OF_STOCK` | 409 | A line could not be reserved. `productName` names it | Refetch the catalog, drop or reduce that line. **Recoverable** |
 | `INTERNAL` | 500 | Database or payment provider failure | Retry **once**. Nothing was charged |
 
@@ -1034,7 +1042,7 @@ network at the locker (BUILDPLAN P4 gate).
 | Param | Type | Default | Notes |
 |---|---|---|---|
 | `date` | `YYYY-MM-DD` | today **in the school's timezone** | The school's calendar day. `2026-02-31` is a 400, not a silent roll-forward to March |
-| `slotId` | cuid | — | One window. **When present, `date` is ignored**, so a stale date cannot answer a locker screen with an empty list. The response's `serviceDate` says which day came back |
+| `slotId` | string | — | One window (same composite id as `GET /api/slots`/checkout). **When present, `date` is ignored**, so a stale date cannot answer a locker screen with an empty list. The response's `serviceDate` says which day came back |
 | `status` | comma-separated `OrderStatus` | see below | Validated against the enum; `?status=NOPE` is a 400, not an empty filter |
 
 **Default statuses: `RESERVED`, `PAID`, `PACKED`, `PICKED_UP`, `REFUNDED`.**
@@ -1055,15 +1063,17 @@ holds its stock and its seat and staff need it to reconcile the shelf.
   "statuses": ["RESERVED", "PAID", "PACKED", "PICKED_UP", "REFUNDED"],
   "slots": [
     {
-      "id": "cmtkqayy9000n5p7dr9r6f8nd",
+      "id": "2026-09-03|11:50|Locker bank C",
       "label": "Lunch A",
       "startTime": "11:50",              // local wall clock, 24h
       "location": "Locker bank C",
       "serviceDate": "2026-09-03T00:00:00.000Z",
-      "active": true,
-      "capacity": 24,
-      "bookedCount": 18,
-      "remaining": 6,
+      "capacity": 24,                    // null if this (startTime, location)
+                                          // no longer exists in the current
+                                          // template — a historical day the
+                                          // schedule has since changed under
+      "bookedCount": 18,                 // live count, not a stored counter
+      "remaining": 6,                    // null when capacity is null
       "counts": {
         "total": 18,                     // EVERY order in the window
         "listed": 7,                     // how many are in `orders` below
@@ -1134,8 +1144,11 @@ by looking up a name.
 - **`pickupCode` is present for every listed order**, unlike the student receipt
   which withholds it until the order is claimable. Staff are the ones who verify
   it.
-- **Inactive slots are included.** Deactivating a window does not cancel the
-  orders in it and those bags still have to be handed out. Show `active: false`.
+- **There is no `active` flag anymore** (no `PickupSlot` table). A window
+  whose `(startTime, location)` no longer exists in the current template —
+  e.g. the schedule changed since a historical day's orders were placed —
+  still appears if it has orders, with `capacity`/`remaining` both `null`.
+  Render `capacity`/`remaining` as "—" in that case, not as `0`.
 
 **Errors** — `ADMIN_UNAUTHORIZED` 401, `ADMIN_NOT_CONFIGURED` 503,
 `INVALID_INPUT` 400 (bad `date`, `slotId` or `status`), `INTERNAL` 500.
@@ -2016,9 +2029,11 @@ shortcut around allergen review, slug uniqueness, or integer-cent pricing.
 2. **Bulk or dev refresh** — edit the `SeedProduct[]` array in
    `prisma/seed.ts` and rerun `npm run db:setup` (or `tsx prisma/seed.ts`
    directly). Idempotent: upserts on `slug`, and deliberately never
-   overwrites `stockQty`, `PickupSlot.capacity` or `Setting.value` on a
-   re-run unless `SEED_RESET_STOCK=1` is set — a re-seed can refresh the
-   whole menu for a new term without touching live inventory counts.
+   overwrites `stockQty` or `Setting.value` on a re-run unless
+   `SEED_RESET_STOCK=1` is set — a re-seed can refresh the whole menu for a
+   new term without touching live inventory counts. Pickup windows are no
+   longer seeded at all (`lib/pickup-windows.ts` is a fixed template, not
+   database rows), so there is nothing for a re-seed to touch there.
 
 3. **Scripted / agent-driven** — `scripts/add-product.mjs` (added
    alongside this entry) calls the same `/api/inventory/*` endpoints a human
@@ -2211,3 +2226,4 @@ the daily spend cap, what happens to spent points on a later refund).
 | 2026-09-04 | P4 | **Staff admin backend shipped**, all eight routes documented in the new §6a: `POST /api/admin/login`, `POST /api/admin/logout`, `GET /api/admin/session`, `GET /api/admin/orders`, and `POST` `…/orders/[orderNumber]/{pack,pickup,cash,refund}` and `…/products/[productId]/stock`. Added `lib/admin-session.ts` (HMAC-SHA256 session cookie on its own `ADMIN_SESSION_SECRET`, separate from the student receipt cookie — verified non-interchangeable in both directions), `lib/db/admin.ts`, the admin schemas in `lib/validation.ts`, seven error codes in `lib/errors.ts`, `refundOrderPayment()` in `lib/stripe/payments.ts`, and `adjust_stock(text,int)` in `manual_constraints.sql` (**re-run that file everywhere**; no Prisma migration). New env vars `ADMIN_PASSCODE` (shared staff passcode, **placeholder pending a human decision**, min 8 chars, no default in any environment) alongside the existing `ADMIN_SESSION_SECRET`; both fail closed. Verified against the seeded dev database over real HTTP: full lunch-service walkthrough (pack → cash → pickup) on both cash and card, every error path, `PENDING` orders refused for packing, the cash guard refusing a handover, card refund through the (simulated) Stripe seam with the seat released 6→5 and stock deliberately unchanged, 15-way concurrent races on all four order actions each resolving to exactly one change, 40 concurrent stock adjustments landing exactly ±40 with 40 distinct returned quantities, 20 concurrent checkouts interleaved with 20 concurrent adjustments composing exactly and deadlock-free, login rate limiting (10 × 401 then 429, malformed bodies counted too), all four fail-closed configuration modes, and a full-log PII grep returning zero hits for any test student's name, email, phone or pickup code. `tsc --noEmit`, full `eslint .`, `next build` (all eight routes `ƒ` dynamic) clean; the pre-existing suite re-run green at 106 + 25 |
 | 2026-09-05 | P4b | **Restricted inventory editor shipped**, six routes documented in the new §6b: `POST /api/inventory/login`, `POST /api/inventory/logout`, `GET /api/inventory/session`, `GET`+`POST /api/inventory/products`, `GET`+`PATCH /api/inventory/products/[productId]`, `POST /api/inventory/products/[productId]/stock`. Added `lib/inventory-session.ts` (its own module, its own `INVENTORY_SESSION_SECRET`, its own `ll_inventory` cookie — **not** a role flag on `lib/admin-session.ts`, which was not touched), `lib/db/inventory.ts`, four inventory schemas in `lib/validation.ts`, four error codes in `lib/errors.ts` (`INVENTORY_UNAUTHORIZED`, `INVENTORY_NOT_CONFIGURED`, `PRODUCT_SLUG_TAKEN`, `ALLERGENS_NOT_REVIEWED`), and `scripts/verify-inventory-isolation.mjs`. New env vars `INVENTORY_SESSION_SECRET` and `INVENTORY_PASSCODE` (**must differ from `ADMIN_PASSCODE`**; min 8 chars, no default, no dev fallback, both fail closed). **No schema migration and no `manual_constraints.sql` change** — the stock route reuses P4's `adjust_stock()`. Allergens are mandatory and explicitly affirmed on every create, every allergen edit and every publish; publishing an empty allergen list additionally requires the empty list to be restated. Photo is a validated URL field; **no upload endpoint was built or stubbed** (`HANDOFF.md` §64). Verified over real HTTP against the seeded dev database — 113 runtime assertions, 0 failures: the isolation script (with a negative control), a staff cookie and a staff token renamed onto `ll_inventory` refused on all six routes, an inventory cookie and an inventory token renamed onto `ll_admin` refused on all seven admin routes plus the receipt and cron routes, full CRUD, every allergen refusal, price/URL/strict-key refusals, stock deltas including 20-way concurrency landing exactly +20 with 20 distinct quantities, all four configuration modes fail-closed (503, staff sign-in unaffected), the production build's `Secure` cookie, login rate limiting in its own key space, a zero-hit PII grep of the full server log, and a zero-hit secret scan of 304 built bundle files. `tsc --noEmit`, `eslint .`, `next build` clean (all six routes `ƒ`); pre-existing suites re-run green at 25 unit + 40 api + 66 concurrency |
 | 2026-09-02 | P2 | `GET /api/products` and `GET /api/slots` shipped and documented in §6. `lib/validation.ts` added with `productQuerySchema` (`checkoutSchema` follows in P3, deliberately not stubbed). Two hardenings over the spec sketch, both noted in `HANDOFF.md` §P2: `excludeAllergens` tokens are validated against the `Allergen` enum instead of passed through as free strings, and a bad query param returns `INVALID_INPUT` instead of an unhandled `ZodError`. Verified against the seeded dev database with curl in both `next dev` and `next build && next start` — allergen exclusion confirmed to drop a product on ANY match (`PEANUTS` removes Trail Mix Bag, whose list is `PEANUTS`/`TREE_NUTS`/`SOY`), `remaining`/`full` confirmed against `book_slot()`-modified counts, `Cache-Control: no-store` confirmed on both, both routes confirmed `ƒ` (dynamic) in the production build |
+| 2026-10-05 | — | **The `PickupSlot` table is gone.** Root cause of a live production incident: the old table was only ever pre-seeded with a rolling 7-day window from whenever `prisma/seed.ts` last ran, nothing re-ran it, and the window silently emptied out — `GET /api/slots` returned nothing bookable and checkout dead-ended. Replaced with a fixed in-code template (`lib/pickup-windows.ts`, same four windows/times/locations/capacities, still placeholder pending CLAUDE.md §7 sign-off — only *where* they live changed) and a live `COUNT(*)` over `orders` for "booked," so there is no rolling window left to run dry. `book_slot(text)` is replaced by `book_pickup_window(timestamp,text,text,int)` in `manual_constraints.sql`, serialized by a transaction-scoped `pg_advisory_xact_lock` keyed on `(service_date, start_time, location)` instead of a row lock — same atomicity guarantee as the single-`UPDATE` trick, reconstructed without a row to hang it on. `Order` gained `pickupLabel`/`pickupStartTime`/`pickupLocation`/`pickupServiceDate` (a snapshot, same philosophy as `OrderItem`'s snapshot fields) and `seatReleasedAt` (replaces the `bookedCount` decrement — null means still holding a seat, set once idempotently by `lib/db/release.ts` and the admin refund route, backstopped by a new `seat_released_only_when_terminal` CHECK). `slotId` is unchanged as a wire field name in `POST /api/checkout` and `GET /api/admin/orders?slotId=`, but it is now a composite string (`serviceDate|startTime|location`), not a database row id — nothing resolvable as a `cuid` anymore. `GET /api/admin/orders`'s `active` field is gone; `capacity`/`remaining` are `number \| null` (null for a historical day whose window no longer exists in the current template). `.github/workflows/deploy-db.yml` was deleted (no more rolling-seed re-run to schedule); there is now no automated path to apply a future migration to production, which is a deliberately accepted open question, not an oversight. Production data backfilled by hand-written migration SQL (not Prisma-generated): existing orders' `slot_id` resolved to the snapshot fields before `pickup_slots` was dropped; `seatReleasedAt` backfilled to "released" for every pre-migration `CANCELLED`/`EXPIRED` order (unconditional under the old path) and left `NULL` ("still held") for every pre-migration `REFUNDED` order, since the old schema never recorded a refund's seat-release choice per-order — the only reconstruction direction that can overcount a closed day's seats rather than risk a future oversell. Verified against a real Postgres database carrying pre-existing order history (the migration ran clean against it, backfill confirmed by direct query) and against the full test suite: 54 unit + 53 API + 107 concurrency + 5 ratelimit + 26 leaks, all green, including every refund/sweep/webhook race that used to read `PickupSlot.bookedCount` (rewritten to a live order count) and a new direct test of `book_pickup_window()`'s advisory-lock race alongside the existing checkout-level one |

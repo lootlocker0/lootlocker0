@@ -11,6 +11,7 @@ import { testDb } from "./setup/db";
 import { BASE_URL, CRON_SECRET, STRIPE_WEBHOOK_SECRET } from "./setup/env";
 import { readServerLog } from "./setup/server";
 import { schoolParts } from "@/lib/timezone";
+import { pickupWindowId } from "@/lib/pickup-windows";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HTTP
@@ -270,21 +271,30 @@ export interface SeedSlotOpts {
   /** Overrides `startsInMinutes` entirely. */
   serviceDate?: Date;
   startTime?: string;
-  active?: boolean;
   label?: string;
   location?: string;
 }
 
 /**
- * Builds a pickup window that starts `startsInMinutes` from now **in
+ * Declares a pickup window that starts `startsInMinutes` from now **in
  * America/Vancouver**, not in the server's timezone.
  *
- * This matters (HANDOFF §17). `PickupSlot.serviceDate` is a date key stored at
+ * This matters (HANDOFF §17). `pickupServiceDate` is a date key stored at
  * midnight UTC and `startTime` is a Vancouver wall clock; a fixture that
  * computes either from the local `Date` getters will agree with a broken
  * server-local cutoff and disagree with a correct one. The suite runs with
  * `TZ=Asia/Tokyo` on both sides precisely so that a fixture built this way and
  * a route using `lib/timezone.ts` have to agree across a calendar-day boundary.
+ *
+ * There is no PickupSlot table anymore — production capacity comes from a
+ * fixed template (lib/pickup-windows.ts) and "booked" is a live count over
+ * `orders`. This writes to `test_pickup_windows`, a table that exists ONLY in
+ * this test database (see lib/pickup-windows-test.ts), which the real
+ * checkout/slots routes resolve exactly like a production template entry —
+ * the server only does that when QA_ALLOW_TEST_WINDOWS=1 (tests/setup/env.ts),
+ * never in production. `location` is always unique (`uniq()`-suffixed) so two
+ * windows seeded in the same minute never collide and, more importantly, so
+ * one test's bookings never leak into another's capacity/race assertions.
  */
 export async function seedSlot(opts: SeedSlotOpts = {}) {
   const startsIn = opts.startsInMinutes ?? 180;
@@ -296,24 +306,39 @@ export async function seedSlot(opts: SeedSlotOpts = {}) {
   const startTime =
     opts.startTime ??
     `${String(p.hour).padStart(2, "0")}:${String(p.minute).padStart(2, "0")}`;
+  const location = opts.location ?? `Locker bank ${uniq()}`;
+  const label = opts.label ?? `QA Window ${uniq()}`;
+  const capacity = opts.capacity ?? 10;
 
-  return testDb.pickupSlot.create({
-    data: {
-      label: opts.label ?? `QA Window ${uniq()}`,
-      startTime,
-      // Unique per slot: @@unique([serviceDate, startTime, location]) otherwise
-      // collides for two windows seeded in the same minute.
-      location: opts.location ?? `Locker bank ${uniq()}`,
-      serviceDate,
-      capacity: opts.capacity ?? 10,
-      bookedCount: 0,
-      active: opts.active ?? true,
-    },
-  });
+  await testDb.$executeRaw`
+    INSERT INTO test_pickup_windows (service_date, start_time, location, label, capacity)
+    VALUES (${serviceDate}, ${startTime}, ${location}, ${label}, ${capacity})
+  `;
+
+  return { id: pickupWindowId(serviceDate, startTime, location), label, startTime, location, serviceDate, capacity };
 }
 
 export const seedSlotMinutesFromNow = (m: number, capacity = 10) =>
   seedSlot({ startsInMinutes: m, capacity });
+
+/** Live "booked" count for a window — replaces re-reading
+ * `PickupSlot.bookedCount`. Matches exactly what book_pickup_window() and
+ * GET /api/slots count: orders for this (date, time, location) that have
+ * not had their seat released. */
+export async function countBookedOrders(
+  serviceDate: Date,
+  startTime: string,
+  location: string,
+): Promise<number> {
+  return testDb.order.count({
+    where: {
+      pickupServiceDate: serviceDate,
+      pickupStartTime: startTime,
+      pickupLocation: location,
+      seatReleasedAt: null,
+    },
+  });
+}
 
 export interface CheckoutPayloadOpts {
   slotId: string;

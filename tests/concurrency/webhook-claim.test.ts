@@ -3,6 +3,7 @@ import { testDb, resetDb } from "../setup/db";
 import {
   chargeRefunded,
   confirmationsSentFor,
+  countBookedOrders,
   countLogEvent,
   paymentIntentFailed,
   paymentIntentSucceeded,
@@ -330,7 +331,7 @@ describe("webhook claim bands", () => {
       (await testDb.product.findUniqueOrThrow({ where: { id: productId } })).stockQty,
     ).toBe(20); // released exactly once
     expect(
-      (await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } })).bookedCount,
+      await countBookedOrders(order.pickupServiceDate, order.pickupStartTime, order.pickupLocation),
     ).toBe(0);
 
     // The claim was never marked finished and has aged out: the next retry
@@ -343,13 +344,17 @@ describe("webhook claim bands", () => {
     expect(second.status).toBe(200);
 
     const stock = await testDb.product.findUniqueOrThrow({ where: { id: productId } });
-    const slot = await testDb.pickupSlot.findUniqueOrThrow({ where: { id: order.slotId } });
+    const booked = await countBookedOrders(
+      order.pickupServiceDate,
+      order.pickupStartTime,
+      order.pickupLocation,
+    );
     console.log(
       `[webhook double release] reclaimed a failed-payment event: stock=${stock.stockQty}/20 ` +
-        `bookedCount=${slot.bookedCount}`,
+        `booked=${booked}`,
     );
     expect(stock.stockQty).toBe(20); // NOT 21
-    expect(slot.bookedCount).toBe(0); // not negative, and the constraint holds
+    expect(booked).toBe(0); // not negative, and the constraint holds
   });
 
   /**
