@@ -15,10 +15,10 @@ export const dynamic = "force-dynamic";
 // GET  — every product, unfiltered.
 // POST — create one.
 //
-// Both are Product-only. Neither touches an order, an order item, a student or a
-// setting, and there is no code path in this file that could: `db.product` is
-// the only model referenced, and the response projection
-// (INVENTORY_PRODUCT_SELECT) is an explicit column list, not a row spread.
+// GET returns Product only. POST atomically creates the Product and its initial
+// purchase-ledger row; neither path touches an order, an order item, a student,
+// or a setting. The response projection (INVENTORY_PRODUCT_SELECT) is an
+// explicit column list, not a row spread.
 
 // ─────────────────────────────────────────────────────────────────────────────
 // GET /api/inventory/products
@@ -117,24 +117,44 @@ export async function POST(req: NextRequest) {
     // property that makes the boundary auditable.
     let product;
     try {
-      product = await db.product.create({
-        data: {
-          slug,
-          name: input.name,
-          description: input.description,
-          priceCents: input.priceCents,
-          category: input.category,
-          rarity: input.rarity,
-          allergens: input.allergens,
-          // Absolute, and safe precisely here: the row does not exist yet, so
-          // there is no concurrent reservation to clobber (CLAUDE.md §2.4).
-          // Every later change goes through adjust_stock().
-          stockQty: input.stockQty,
-          active: input.active,
-          imageUrl: input.imageUrl,
-          sortOrder: input.sortOrder ?? 0,
-        },
-        select: INVENTORY_PRODUCT_SELECT,
+      product = await db.$transaction(async (tx) => {
+        const created = await tx.product.create({
+          data: {
+            slug,
+            name: input.name,
+            description: input.description,
+            priceCents: input.priceCents,
+            category: input.category,
+            rarity: input.rarity,
+            allergens: input.allergens,
+            // Absolute, and safe precisely here: the row does not exist yet,
+            // so there is no concurrent reservation to clobber (CLAUDE.md §2.4).
+            stockQty: input.stockQty,
+            active: input.active,
+            imageUrl: input.imageUrl,
+            sortOrder: input.sortOrder ?? 0,
+          },
+          select: INVENTORY_PRODUCT_SELECT,
+        });
+
+        if (input.stockQty > 0) {
+          await tx.stockTransaction.create({
+            data: {
+              productId: created.id,
+              type: "PURCHASE",
+              qtyDelta: input.stockQty,
+              unitCostCents: Math.round(
+                input.initialPurchaseTotalCents / input.stockQty,
+              ),
+              totalCostCents: input.initialPurchaseTotalCents,
+              stockQtyAfter: input.stockQty,
+              sessionId,
+            },
+            select: { id: true },
+          });
+        }
+
+        return created;
       });
     } catch (e) {
       // The unique index on `slug` is the race winner, not a pre-check: two
@@ -159,6 +179,7 @@ export async function POST(req: NextRequest) {
       slug: product.slug,
       priceCents: product.priceCents,
       stockQty: product.stockQty,
+      initialPurchaseTotalCents: input.initialPurchaseTotalCents,
       active: product.active,
       allergenCount: product.allergens.length,
       sessionId,

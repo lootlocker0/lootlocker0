@@ -8,8 +8,8 @@ import { logEvent } from "./log";
 // Product image uploads (app/api/inventory/images/route.ts) need somewhere to
 // actually persist the file. Vercel's serverless functions run on a
 // read-only filesystem outside `/tmp` — a plain fs.writeFile into `public/`
-// works in local dev (a real disk) but throws on Vercel. Modes, resolved once
-// per process, mirror lib/rate-limit.ts's shape:
+// works on localhost but throws on Vercel. Localhost requests always override
+// the process default and use disk storage:
 //
 //   blob         BLOB_READ_WRITE_TOKEN present. Real Vercel Blob storage —
 //                works identically in dev, preview, and production, and the
@@ -25,13 +25,14 @@ const IS_PROD = process.env.NODE_ENV === "production";
 
 type Mode = "blob" | "disk" | "fail-closed";
 
-function resolveMode(): Mode {
+function resolveMode(forceLocal: boolean): Mode {
+  if (forceLocal) return "disk";
   if (process.env.BLOB_READ_WRITE_TOKEN) return "blob";
   if (!IS_PROD) return "disk";
   return "fail-closed";
 }
 
-export const imageStorageMode: Mode = resolveMode();
+export const imageStorageMode: Mode = resolveMode(false);
 
 logEvent("image_storage_mode", { mode: imageStorageMode });
 
@@ -39,10 +40,16 @@ logEvent("image_storage_mode", { mode: imageStorageMode });
  *  product — a real `https://` URL in `blob` mode, a site-relative path in
  *  `disk` mode. `lib/validation.ts`'s `productImageUrl` schema accepts both
  *  shapes already. */
-export async function saveProductImage(file: File, extension: string): Promise<string> {
+export async function saveProductImage(
+  file: File,
+  extension: string,
+  forceLocal = false,
+): Promise<string> {
   const filename = `${randomUUID()}.${extension}`;
+  const mode = resolveMode(forceLocal);
+  if (forceLocal) logEvent("image_storage_mode", { mode, host: "local" });
 
-  switch (imageStorageMode) {
+  switch (mode) {
     case "blob": {
       const blob = await put(`ProductImages/${filename}`, file, {
         access: "public",

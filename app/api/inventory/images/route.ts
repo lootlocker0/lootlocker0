@@ -14,6 +14,15 @@ const MIME_TO_EXTENSION: Record<string, string> = {
   "image/gif": "gif",
 };
 
+function isLocalHostname(hostname: string): boolean {
+  return (
+    hostname === "localhost" ||
+    hostname === "127.0.0.1" ||
+    hostname === "::1" ||
+    hostname === "[::1]"
+  );
+}
+
 export async function POST(req: NextRequest) {
   try {
     requireInventorySession(req);
@@ -36,7 +45,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    const imageUrl = await saveProductImage(file, extension);
+    const imageUrl = await saveProductImage(
+      file,
+      extension,
+      isLocalHostname(req.nextUrl.hostname),
+    );
 
     return Response.json(
       { imageUrl },

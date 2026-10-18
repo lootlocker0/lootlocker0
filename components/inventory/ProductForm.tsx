@@ -27,6 +27,19 @@ function parseDollarsToCents(raw: string): { cents: number } | { error: string }
   return { cents };
 }
 
+function parsePurchasePriceToCents(raw: string): { cents: number } | { error: string } {
+  const trimmed = raw.trim();
+  if (!/^\d+(?:\.\d{1,2})?$/.test(trimmed)) {
+    return { error: "Enter the total purchase price, with up to two decimal places." };
+  }
+  const [dollars, fraction = ""] = trimmed.split(".");
+  const cents = Number(dollars) * 100 + Number(fraction.padEnd(2, "0"));
+  if (!Number.isSafeInteger(cents) || cents > 2_147_483_647) {
+    return { error: "Purchase price is too large." };
+  }
+  return { cents };
+}
+
 function centsToDollarInput(cents: number): string {
   return (cents / 100).toFixed(2);
 }
@@ -83,6 +96,7 @@ export function ProductForm(props: Props) {
     initial && initial.sortOrder !== 0 ? String(initial.sortOrder) : "",
   );
   const [stockQtyInput, setStockQtyInput] = useState(""); // create-only, absolute, never defaulted
+  const [purchasePriceInput, setPurchasePriceInput] = useState("");
   const [active, setActive] = useState(initial?.active ?? false);
 
   const [allergens, setAllergens] = useState<Allergen[]>(initial?.allergens ?? []);
@@ -221,6 +235,16 @@ export function ProductForm(props: Props) {
       stockQty = parsed.value;
     }
 
+    let initialPurchaseTotalCents: number | undefined;
+    if (!isEdit) {
+      const parsed = parsePurchasePriceToCents(purchasePriceInput);
+      if ("error" in parsed) {
+        setBlockMessage(parsed.error);
+        return;
+      }
+      initialPurchaseTotalCents = parsed.cents;
+    }
+
     setSubmitting(true);
 
     const includeAllergens = !isEdit || allergensReviewed;
@@ -239,6 +263,7 @@ export function ProductForm(props: Props) {
     if (!isEdit) {
       body.active = active;
       body.stockQty = stockQty;
+      body.initialPurchaseTotalCents = initialPurchaseTotalCents;
       if (slug.trim() !== "") body.slug = slug.trim();
     } else if (activeChanged) {
       body.active = active;
@@ -425,21 +450,45 @@ export function ProductForm(props: Props) {
       </div>
 
       {!isEdit && (
-        <Field
-          label="Starting stock quantity"
-          htmlFor="pf-stock"
-          hint="Absolute count, only set here at creation. 0–10000. After this, stock only changes by a +/- adjustment."
-        >
-          <input
-            id="pf-stock"
-            inputMode="numeric"
-            value={stockQtyInput}
-            onChange={(e) => setStockQtyInput(e.target.value)}
-            placeholder="0"
-            required
-            className={inputClass}
-          />
-        </Field>
+        <>
+          <Field
+            label="Starting stock quantity"
+            htmlFor="pf-stock"
+            hint="Absolute count, only set here at creation. 0–10000. After this, stock only changes by a +/- adjustment."
+          >
+            <input
+              id="pf-stock"
+              inputMode="numeric"
+              value={stockQtyInput}
+              onChange={(e) => setStockQtyInput(e.target.value)}
+              placeholder="0"
+              required
+              className={inputClass}
+            />
+          </Field>
+          <Field
+            label="Purchase price"
+            htmlFor="pf-purchase-price"
+            hint="Total cost for all starting stock quantities, in dollars (e.g. 12.50)."
+          >
+            <input
+              id="pf-purchase-price"
+              inputMode="decimal"
+              value={purchasePriceInput}
+              onChange={(e) => setPurchasePriceInput(e.target.value)}
+              placeholder="0.00"
+              required
+              className={inputClass}
+            />
+          </Field>
+        </>
+      )}
+
+      {isEdit && initial && (
+        <section aria-label="Current stock" className="border-t border-white/10 pt-4">
+          <h3 className="font-mono text-xs uppercase text-text-faint">Current stock</h3>
+          <p className="mt-1 font-display text-xl text-gold">{initial.stockQty} items</p>
+        </section>
       )}
 
       <AllergenGate

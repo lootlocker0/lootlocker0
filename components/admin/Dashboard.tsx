@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ShardButton } from "@/components/ui/ShardButton";
 import { adminFetch, type AdminResult } from "./adminApi";
+import { CostAnalysisView } from "./CostAnalysisView";
 import { PickList } from "./PickList";
 import { StockAdjuster } from "./StockAdjuster";
 import { TransactionsList } from "./TransactionsList";
@@ -14,7 +15,7 @@ type OrdersState =
   | { status: "error"; message: string }
   | { status: "ready"; data: AdminOrdersResponse };
 
-type AdminView = "orders" | "ledger" | "transactions";
+type AdminView = "orders" | "ledger" | "transactions" | "cost-analysis";
 
 // docs/API-CONTRACT.md §6a: PENDING is excluded by default because a
 // printed sheet containing an unpaid card order is a bag handed to a
@@ -210,6 +211,18 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
             >
               Transactions
             </button>
+            <button
+              type="button"
+              aria-current={activeView === "cost-analysis" ? "page" : undefined}
+              onClick={() => setActiveView("cost-analysis")}
+              className={`border-2 px-3 py-2 text-left font-mono text-xs uppercase transition-colors ${
+                activeView === "cost-analysis"
+                  ? "border-brand bg-brand/10 text-brand"
+                  : "border-white/10 text-text-dim hover:border-brand hover:text-brand"
+              }`}
+            >
+              Cost analysis
+            </button>
             <a
               href="/inventory"
               className="border-2 border-white/10 px-3 py-2 font-mono text-xs uppercase text-text-dim transition-colors hover:border-brand hover:text-brand"
@@ -222,6 +235,8 @@ export function Dashboard({ onUnauthorized }: { onUnauthorized: () => void }) {
         <main className="min-w-0 flex-1 px-4 py-8 sm:px-8">
         {activeView === "transactions" ? (
           <TransactionsList onUnauthorized={onUnauthorized} />
+        ) : activeView === "cost-analysis" ? (
+          <CostAnalysisView onUnauthorized={onUnauthorized} />
         ) : state.status === "loading" && (
           <p role="status" className="text-text-dim">
             Loading orders…

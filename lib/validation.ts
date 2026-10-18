@@ -257,6 +257,7 @@ export const adminStockAdjustSchema = z.object({
     }),
   type: z.enum(["PURCHASE", "ADJUSTMENT"]).default("ADJUSTMENT"),
   unitCostCents: z.number().int().min(0).max(2_147_483_647).optional(),
+  totalCostCents: z.number().int().min(0).max(2_147_483_647).optional(),
 }).superRefine((value, ctx) => {
   if (value.type === "PURCHASE") {
     if (value.delta <= 0) {
@@ -266,29 +267,61 @@ export const adminStockAdjustSchema = z.object({
         message: "A purchase must add stock",
       });
     }
-    if (value.unitCostCents === undefined) {
+    if (value.unitCostCents === undefined && value.totalCostCents === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totalCostCents"],
+        message: "Purchase total is required for a purchase",
+      });
+    }
+    if (value.unitCostCents !== undefined && value.totalCostCents !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totalCostCents"],
+        message: "Provide either a purchase total or legacy unit cost, not both",
+      });
+    }
+  } else {
+    if (value.unitCostCents !== undefined) {
       ctx.addIssue({
         code: "custom",
         path: ["unitCostCents"],
-        message: "Unit cost is required for a purchase",
+        message: "Unit cost is only accepted for a purchase",
       });
     }
-  } else if (value.unitCostCents !== undefined) {
-    ctx.addIssue({
-      code: "custom",
-      path: ["unitCostCents"],
-      message: "Unit cost is only accepted for a purchase",
-    });
+    if (value.totalCostCents !== undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totalCostCents"],
+        message: "Purchase total is only accepted for a purchase",
+      });
+    }
   }
 });
 
-export const adminRecordSaleSchema = z
+const adminRecordSaleLineSchema = z
   .object({
     productId: z.cuid(),
     qty: z.number().int().min(1).max(10_000),
     saleTotalCents: z.number().int().min(0).max(2_147_483_647),
   })
   .strict();
+
+export const adminRecordSaleSchema = z.union([
+  adminRecordSaleLineSchema,
+  z
+    .object({
+      items: z
+        .array(adminRecordSaleLineSchema)
+        .min(1)
+        .max(20)
+        .refine(
+          (items) => new Set(items.map((item) => item.productId)).size === items.length,
+          "Product IDs must be distinct.",
+        ),
+    })
+    .strict(),
+]);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // P4b — restricted inventory editor (app/api/inventory/**)
@@ -486,6 +519,11 @@ export const inventoryProductCreateSchema = z
     /// change is a delta.
     stockQty: productStockQty,
 
+    /// Exact supplier total for the starting stock, in integer cents. Stored
+    /// on the initial PURCHASE ledger row; unitCostCents remains available for
+    /// existing callers and is derived from this exact total.
+    initialPurchaseTotalCents: z.number().int().min(0).max(2_147_483_647),
+
     imageUrl: productImageUrl,
 
     /// Explicit. A product that appears in the shop the instant it is saved,
@@ -494,6 +532,15 @@ export const inventoryProductCreateSchema = z
     active: z.boolean(),
 
     sortOrder: productSortOrder.optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.stockQty === 0 && value.initialPurchaseTotalCents !== 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["initialPurchaseTotalCents"],
+        message: "Must be 0 when there is no starting stock.",
+      });
+    }
   })
   .strict();
 
@@ -546,13 +593,8 @@ export type InventoryProductUpdate = z.infer<typeof inventoryProductUpdateSchema
 
 /// `POST /api/inventory/products/[productId]/stock`.
 ///
-/// A RELATIVE change, exactly like the staff route, and for exactly the same
-/// reason: "set stock to 7" is a read-then-write with a human in the middle, and
-/// a checkout that reserved a unit between the count and the submit gets
-/// silently un-reserved (CLAUDE.md §2.4). The person counting the box is
-/// thirteen, which is an argument for computing the delta for them in the UI —
-/// not for relaxing the invariant, which does not care who is holding the
-/// clipboard.
+/// A relative stock change. Positive changes are supplier purchases and require
+/// an exact total; negative changes are stock corrections.
 ///
 /// Bounded tighter than the staff route's ±10000: this role restocks a shelf
 /// from a delivery, and a four-digit correction on a school snack catalog is a
@@ -566,5 +608,27 @@ export const inventoryStockAdjustSchema = z
       .refine((n) => Math.abs(n) <= 1_000, {
         message: "Adjustment is too large",
       }),
+    totalCostCents: z
+      .number()
+      .int()
+      .min(0)
+      .max(2_147_483_647)
+      .optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.delta > 0 && value.totalCostCents === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["totalCostCents"],
+        message: "Purchase total is required when adding stock",
+      });
+    }
+    if (value.totalCostCents !== undefined && value.delta <= 0) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["delta"],
+        message: "A purchase must add stock",
+      });
+    }
   })
   .strict();

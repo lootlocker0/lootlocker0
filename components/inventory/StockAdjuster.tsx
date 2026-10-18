@@ -28,21 +28,39 @@ export function StockAdjuster({
   onUnauthorized: () => void;
 }) {
   const [delta, setDelta] = useState("");
+  const [purchasePrice, setPurchasePrice] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<InventoryApiError | null>(null);
   const [result, setResult] = useState<{ previous: number; next: number } | null>(null);
 
-  async function apply(e: React.FormEvent) {
-    e.preventDefault();
+  async function apply() {
     const trimmed = delta.trim();
     const n = Number(trimmed);
-    if (trimmed === "" || !Number.isInteger(n) || n === 0) {
+    if (!/^[+-]?\d+$/.test(trimmed) || !Number.isSafeInteger(n) || n === 0) {
       setError({ code: "INVALID_INPUT", message: "Enter a non-zero whole number, e.g. +7 or -2." });
       return;
     }
     if (Math.abs(n) > 1000) {
       setError({ code: "INVALID_INPUT", message: "Adjustments are limited to ±1000 at a time." });
       return;
+    }
+    const body: { delta: number; totalCostCents?: number } = { delta: n };
+    if (n > 0) {
+      const rawPrice = purchasePrice.trim();
+      if (!/^\d+(?:\.\d{1,2})?$/.test(rawPrice)) {
+        setError({
+          code: "INVALID_INPUT",
+          message: "Enter the total purchase price for the added stock, with up to two decimal places.",
+        });
+        return;
+      }
+      const [dollars, fraction = ""] = rawPrice.split(".");
+      const totalCostCents = Number(dollars) * 100 + Number(fraction.padEnd(2, "0"));
+      if (!Number.isSafeInteger(totalCostCents) || totalCostCents > 2_147_483_647) {
+        setError({ code: "INVALID_INPUT", message: "Purchase price is too large." });
+        return;
+      }
+      body.totalCostCents = totalCostCents;
     }
     setBusy(true);
     setError(null);
@@ -53,7 +71,7 @@ export function StockAdjuster({
       delta: number;
     }>(`/api/inventory/products/${productId}/stock`, {
       method: "POST",
-      body: JSON.stringify({ delta: n }),
+      body: JSON.stringify(body),
     });
     setBusy(false);
     if (!res.ok) {
@@ -66,12 +84,13 @@ export function StockAdjuster({
     }
     setResult({ previous: res.data.previousStockQty, next: res.data.stockQty });
     setDelta("");
+    setPurchasePrice("");
     onAdjusted(res.data.stockQty);
   }
 
   return (
     <div className="border-2 border-white/10 bg-surface-2 p-3">
-      <form onSubmit={apply} className="flex flex-wrap items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <label className="font-mono text-xs uppercase text-text-faint" htmlFor={`stock-delta-${productId}`}>
           Adjust stock for {name}
         </label>
@@ -81,18 +100,45 @@ export function StockAdjuster({
           inputMode="text"
           value={delta}
           onChange={(e) => setDelta(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              void apply();
+            }
+          }}
           placeholder="+7 or -2"
           aria-invalid={error ? true : undefined}
           aria-describedby={error ? `stock-delta-error-${productId}` : undefined}
           className="w-28 border-2 border-white/10 bg-surface-3 px-2 py-1 font-mono text-text focus:border-brand"
         />
-        <ShardButton type="submit" size="sm" loading={busy}>
-          Apply
+        {Number(delta) > 0 && (
+          <label className="flex items-center gap-2 font-mono text-xs text-text-faint">
+            Total purchase price ($)
+            <input
+              type="text"
+              inputMode="decimal"
+              value={purchasePrice}
+              onChange={(e) => setPurchasePrice(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void apply();
+                }
+              }}
+              placeholder="12.50"
+              aria-label={`Total purchase price for added ${name} stock`}
+              aria-invalid={error ? true : undefined}
+              className="w-28 border-2 border-white/10 bg-surface-3 px-2 py-1 font-mono text-text focus:border-brand"
+            />
+          </label>
+        )}
+        <ShardButton type="button" size="sm" loading={busy} onClick={() => void apply()}>
+          {Number(delta) > 0 ? "Record purchase" : "Save adjustment"}
         </ShardButton>
         <span className="font-mono text-xs text-text-dim">
           {result ? `${result.previous} → ${result.next}` : `Currently ${currentStock}`}
         </span>
-      </form>
+      </div>
       <p className="mt-2 text-xs text-text-dim">
         Count what&rsquo;s physically on the shelf and enter the difference —
         the screen already accounts for anything sold since you last checked.

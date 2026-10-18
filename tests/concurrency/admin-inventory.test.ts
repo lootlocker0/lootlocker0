@@ -385,6 +385,138 @@ describe("P4 stock ledger — stock and audit row commit together", () => {
     expect(await testDb.stockTransaction.count({ where: { productId: product.id } })).toBe(1);
   });
 
+  it("rejects invalid multi-sale lines without changing stock or the ledger", async () => {
+    const admin = await adminCookie();
+    const product = await seedProduct({ stockQty: 8 });
+    const invalidPayloads = [
+      { items: [] },
+      { items: [{ productId: product.id, qty: 0, saleTotalCents: 100 }] },
+      { items: [{ productId: product.id, qty: 1.5, saleTotalCents: 100 }] },
+      { items: [{ productId: product.id, qty: 1, saleTotalCents: -1 }] },
+      { items: [{ productId: product.id, qty: 1, saleTotalCents: 100.5 }] },
+      {
+        items: [
+          { productId: product.id, qty: 1, saleTotalCents: 100 },
+          { productId: product.id, qty: 2, saleTotalCents: 200 },
+        ],
+      },
+    ];
+
+    for (const payload of invalidPayloads) {
+      const response = await adminPost("/api/admin/sales", admin, payload);
+      expect(response.status, JSON.stringify(payload)).toBe(400);
+    }
+
+    expect((await testDb.product.findUniqueOrThrow({ where: { id: product.id } })).stockQty).toBe(
+      8,
+    );
+    expect(await testDb.stockTransaction.count()).toBe(0);
+  });
+
+  it("rolls back all product deductions when any multi-sale line is out of stock", async () => {
+    const admin = await adminCookie();
+    const products = await Promise.all([
+      seedProduct({ stockQty: 5 }),
+      seedProduct({ stockQty: 5 }),
+    ]);
+    const [first, second] = [...products].sort((a, b) => a.id.localeCompare(b.id));
+
+    // The route locks in product-id order. Make the first deduction succeed
+    // and the later one fail so this verifies transaction rollback, not merely
+    // rejection before any stock was touched.
+    await testDb.product.update({ where: { id: first.id }, data: { stockQty: 5 } });
+    await testDb.product.update({ where: { id: second.id }, data: { stockQty: 1 } });
+    const response = await adminPost("/api/admin/sales", admin, {
+      items: [
+        { productId: second.id, qty: 2, saleTotalCents: 250 },
+        { productId: first.id, qty: 1, saleTotalCents: 125 },
+      ],
+    });
+
+    expect(response.status, response.text).toBe(409);
+    expect(
+      await testDb.product.findMany({
+        where: { id: { in: products.map((product) => product.id) } },
+        select: { id: true, stockQty: true },
+      }),
+    ).toEqual(
+      expect.arrayContaining([
+        { id: first.id, stockQty: 5 },
+        { id: second.id, stockQty: 1 },
+      ]),
+    );
+    expect(
+      await testDb.stockTransaction.count({
+        where: { productId: { in: products.map((product) => product.id) } },
+      }),
+    ).toBe(0);
+  });
+
+  it("records one transaction per multi-sale line with the matching amount", async () => {
+    const admin = await adminCookie();
+    const products = await Promise.all([
+      seedProduct({ stockQty: 9 }),
+      seedProduct({ stockQty: 6 }),
+    ]);
+    const [first, second] = [...products].sort((a, b) => a.id.localeCompare(b.id));
+    const response = await adminPost("/api/admin/sales", admin, {
+      // Deliberately reverse lock order; response/ledger amounts must remain
+      // associated with the corresponding product.
+      items: [
+        { productId: second.id, qty: 2, saleTotalCents: 875 },
+        { productId: first.id, qty: 3, saleTotalCents: 1_025 },
+      ],
+    });
+
+    expect(response.status, response.text).toBe(201);
+    expect(response.body.items).toEqual([
+      {
+        productId: second.id,
+        productName: second.name,
+        qty: 2,
+        saleTotalCents: 875,
+        stockQty: 4,
+      },
+      {
+        productId: first.id,
+        productName: first.name,
+        qty: 3,
+        saleTotalCents: 1_025,
+        stockQty: 6,
+      },
+    ]);
+
+    const transactions = await testDb.stockTransaction.findMany({
+      where: { productId: { in: products.map((product) => product.id) } },
+      select: {
+        productId: true,
+        type: true,
+        qtyDelta: true,
+        saleTotalCents: true,
+        stockQtyAfter: true,
+      },
+    });
+    expect(transactions).toHaveLength(2);
+    expect(transactions).toEqual(
+      expect.arrayContaining([
+        {
+          productId: second.id,
+          type: "SALE",
+          qtyDelta: -2,
+          saleTotalCents: 875,
+          stockQtyAfter: 4,
+        },
+        {
+          productId: first.id,
+          type: "SALE",
+          qtyDelta: -3,
+          saleTotalCents: 1_025,
+          stockQtyAfter: 6,
+        },
+      ]),
+    );
+  });
+
   it("rolls back the stock change when the ledger insert fails", async () => {
     const admin = await adminCookie();
     const product = await seedProduct({ stockQty: 12 });

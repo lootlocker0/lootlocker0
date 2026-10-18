@@ -292,7 +292,8 @@ model StockTransaction {
   type          StockTransactionType
   qtyDelta      Int                  @map("qty_delta")
   unitCostCents Int?                 @map("unit_cost_cents")
-  saleTotalCents Int?                @map("sale_total_cents")
+  totalCostCents Int?                 @map("total_cost_cents")
+  saleTotalCents Int?                 @map("sale_total_cents")
   stockQtyAfter Int                  @map("stock_qty_after")
   sessionId     String?              @map("session_id")
   createdAt     DateTime             @default(now()) @map("created_at")

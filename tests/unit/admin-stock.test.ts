@@ -17,12 +17,32 @@ describe("adminStockAdjustSchema", () => {
     expect(inventoryStockAdjustSchema.safeParse({ delta: -2 }).success).toBe(true);
   });
 
+  it("requires exact purchase totals for inventory stock additions", () => {
+    expect(
+      inventoryStockAdjustSchema.safeParse({ delta: 5, totalCostCents: 725 }).success,
+    ).toBe(true);
+    expect(inventoryStockAdjustSchema.safeParse({ delta: 5 }).success).toBe(false);
+    expect(
+      inventoryStockAdjustSchema.safeParse({ delta: -2, totalCostCents: 100 }).success,
+    ).toBe(false);
+  });
+
   it("accepts a positive purchase with a non-negative integer unit cost", () => {
     expect(
       adminStockAdjustSchema.safeParse({
         delta: 5,
         type: "PURCHASE",
         unitCostCents: 125,
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts an exact purchase total for the full quantity", () => {
+    expect(
+      adminStockAdjustSchema.safeParse({
+        delta: 5,
+        type: "PURCHASE",
+        totalCostCents: 725,
       }).success,
     ).toBe(true);
   });
@@ -34,6 +54,8 @@ describe("adminStockAdjustSchema", () => {
     [{ delta: 1, type: "PURCHASE", unitCostCents: 1.5 }],
     [{ delta: 1, type: "PURCHASE", unitCostCents: 2_147_483_648 }],
     [{ delta: 1, type: "ADJUSTMENT", unitCostCents: 100 }],
+    [{ delta: 1, type: "PURCHASE", totalCostCents: 100, unitCostCents: 20 }],
+    [{ delta: 1, type: "ADJUSTMENT", totalCostCents: 100 }],
   ])("rejects invalid purchase/cost combinations: %o", (payload) => {
     expect(adminStockAdjustSchema.safeParse(payload).success).toBe(false);
   });

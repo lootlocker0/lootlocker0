@@ -63,7 +63,11 @@ export async function POST(
         fields: parsed.error.flatten().fieldErrors,
       });
     }
-    const { delta, type, unitCostCents } = parsed.data;
+    const { delta, type, unitCostCents, totalCostCents } = parsed.data;
+    const recordedUnitCostCents =
+      totalCostCents === undefined
+        ? unitCostCents
+        : Math.round(totalCostCents / delta);
 
     // The atomic stock update and its audit row either commit together or
     // neither becomes visible.
@@ -79,7 +83,8 @@ export async function POST(
           productId,
           type,
           qtyDelta: delta,
-          unitCostCents: unitCostCents ?? null,
+          unitCostCents: recordedUnitCostCents ?? null,
+          totalCostCents: totalCostCents ?? null,
           stockQtyAfter: stockQty,
           sessionId,
         },
@@ -128,7 +133,8 @@ export async function POST(
         stockQty,
         delta,
         type,
-        unitCostCents: unitCostCents ?? null,
+        unitCostCents: recordedUnitCostCents ?? null,
+        totalCostCents: totalCostCents ?? null,
         transactionId: mutation.transactionId,
         /// Derived arithmetic from the atomic result, not a second read — it is
         /// what the quantity was at the instant of the write.

@@ -32,6 +32,7 @@ type StockHistoryEntry = {
   direction: "IN" | "OUT";
   qtyDelta: number;
   unitCostCents: number | null;
+  totalCostCents: number | null;
   saleTotalCents: number | null;
   stockQtyAfter: number | null;
   orderNumber: string | null;
@@ -153,7 +154,7 @@ function StockRow({
   const [adjustmentQty, setAdjustmentQty] = useState("");
   const [adjustmentDirection, setAdjustmentDirection] = useState<1 | -1>(1);
   const [purchaseQty, setPurchaseQty] = useState("");
-  const [unitCostCents, setUnitCostCents] = useState("");
+  const [purchaseTotal, setPurchaseTotal] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<AdminApiError | null>(null);
   const [result, setResult] = useState<{ previous: number; next: number } | null>(null);
@@ -176,7 +177,7 @@ function StockRow({
     setHistory({ status: "ready", data: response.data });
   }
 
-  async function saveStock(body: { delta: number; type?: "PURCHASE"; unitCostCents?: number }) {
+  async function saveStock(body: { delta: number; type?: "PURCHASE"; totalCostCents?: number }) {
     setBusy(true);
     setError(null);
     const response = await adminFetch<{ stockQty: number; previousStockQty: number }>(
@@ -211,19 +212,25 @@ function StockRow({
   async function applyPurchase(event: React.FormEvent) {
     event.preventDefault();
     const quantity = Number(purchaseQty.trim());
-    const cost = Number(unitCostCents.trim());
     if (!Number.isSafeInteger(quantity) || quantity <= 0 || quantity > 10_000) {
       setError({ code: "INVALID_INPUT", message: "Purchase quantity must be a whole number from 1 to 10,000." });
       return;
     }
-    if (unitCostCents.trim() === "" || !Number.isSafeInteger(cost) || cost < 0) {
-      setError({ code: "INVALID_INPUT", message: "Enter unit cost as non-negative integer cents." });
+    const rawPrice = purchaseTotal.trim();
+    if (!/^\d+(?:\.\d{1,2})?$/.test(rawPrice)) {
+      setError({ code: "INVALID_INPUT", message: "Enter the total purchase price in dollars, with up to two decimal places." });
       return;
     }
-    const saved = await saveStock({ delta: quantity, type: "PURCHASE", unitCostCents: cost });
+    const [dollars, fraction = ""] = rawPrice.split(".");
+    const totalCostCents = Number(dollars) * 100 + Number(fraction.padEnd(2, "0"));
+    if (!Number.isSafeInteger(totalCostCents) || totalCostCents > 2_147_483_647) {
+      setError({ code: "INVALID_INPUT", message: "Purchase price is too large." });
+      return;
+    }
+    const saved = await saveStock({ delta: quantity, type: "PURCHASE", totalCostCents });
     if (saved) {
       setPurchaseQty("");
-      setUnitCostCents("");
+      setPurchaseTotal("");
     }
   }
 
@@ -326,15 +333,14 @@ function StockRow({
             />
           </label>
           <label className="flex flex-col gap-1 font-mono text-[10px] uppercase text-text-faint">
-            Unit cost (cents)
+            Total purchase price ($)
             <input
-              type="number"
-              min="0"
-              max="2147483647"
-              step="1"
-              value={unitCostCents}
-              onChange={(event) => setUnitCostCents(event.target.value)}
-              aria-label={`Unit cost in cents for ${row.name}`}
+              type="text"
+              inputMode="decimal"
+              value={purchaseTotal}
+              onChange={(event) => setPurchaseTotal(event.target.value)}
+              placeholder="12.50"
+              aria-label={`Total purchase price in dollars for ${row.name}`}
               className="w-32 border-2 border-white/10 bg-surface-3 px-2 py-1 text-sm text-text focus:border-brand"
             />
           </label>
@@ -398,7 +404,11 @@ function StockRow({
                           </td>
                           <td className="border-b border-white/5 px-2 py-2 text-text-dim">
                             {entry.source === "PURCHASE"
-                              ? entry.unitCostCents === null ? "—" : `Unit ${formatCents(entry.unitCostCents)}`
+                              ? entry.totalCostCents !== null
+                                ? formatCents(entry.totalCostCents)
+                                : entry.unitCostCents === null
+                                  ? "—"
+                                  : `Unit ${formatCents(entry.unitCostCents)}`
                               : entry.source === "SALE"
                                 ? entry.saleTotalCents === null ? "—" : formatCents(entry.saleTotalCents)
                                 : "—"}

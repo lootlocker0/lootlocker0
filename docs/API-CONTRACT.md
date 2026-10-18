@@ -21,10 +21,10 @@ plus the data types and enum values fixed by the database. Later phases append
 to §6 without restructuring anything above it.
 
 > **P4 deployment step, do not skip.** Apply Prisma migrations with
-> `npx prisma migrate deploy`, then re-run
-> `psql "$DATABASE_URL" -f prisma/migrations/manual_constraints.sql` against
-> every database — dev, CI, `looplockers_test`, production — or that one route
-> 500s. The SQL constraints file is idempotent (§5).
+> `npm run db:migrate`, then apply the SQL functions and constraints with
+> `npm run db:constraints` against every database — dev, CI, `looplockers_test`,
+> production — or checkout and inventory routes will 500. The latter uses the
+> Prisma config to load `.env.local`/`.env`; the SQL file is idempotent (§5).
 
 ---
 
@@ -1437,14 +1437,15 @@ the same database transaction.
 **Request**
 
 ```json
-{ "delta": 5, "type": "PURCHASE", "unitCostCents": 125 }
+{ "delta": 5, "type": "PURCHASE", "totalCostCents": 725 }
 ```
 
 | Field | Type | Notes |
 |---|---|---|
 | `delta` | int | **Signed and relative.** Non-zero, \|delta\| ≤ 10000 |
 | `type` | `PURCHASE` \| `ADJUSTMENT` | Optional; defaults to `ADJUSTMENT` |
-| `unitCostCents` | non-negative int | Required for `PURCHASE`, which requires positive `delta`; rejected for `ADJUSTMENT` |
+| `totalCostCents` | non-negative int | Exact supplier total for the added quantity, in cents. Preferred for `PURCHASE`; rejected for `ADJUSTMENT`. |
+| `unitCostCents` | non-negative int | Legacy purchase input; accepted only when `totalCostCents` is absent. New clients should submit the exact total instead. |
 
 **There is no absolute "set stock to N", and that is a correctness requirement,
 not an interface preference.** "Set stock to 7" is a read-then-write with a
@@ -1473,7 +1474,8 @@ discovered.
   "stockQty": 36,
   "delta": 5,
   "type": "PURCHASE",
-  "unitCostCents": 125,
+  "unitCostCents": 145,
+  "totalCostCents": 725,
   "previousStockQty": 31,
   "active": true,
   "allergens": ["SULPHITES"]
@@ -1485,8 +1487,10 @@ so it already includes any concurrent checkout that landed first. It will
 sometimes not equal what the staff member expected, and that is the point; show
 the number, not their arithmetic.
 
-The stock update and audit row are all-or-nothing. Purchase unit cost is
-supplier cost in integer cents, not the product's catalog sale price.
+The stock update and audit row are all-or-nothing. For exact-cost purchases,
+`totalCostCents` is stored as entered and `unitCostCents` is derived by
+rounding total/quantity; older requests using only `unitCostCents` remain
+supported. Supplier cost is never inferred from the product's catalog price.
 
 **Errors**
 
@@ -1509,10 +1513,14 @@ for what an order did.**
 
 ### `POST /api/admin/sales`
 
-Record a manual sale. This endpoint only accepts a product, positive quantity
-sold, and total sale amount in integer cents. It atomically subtracts the
-quantity from stock using `adjust_stock()` and stores a `SALE` ledger row in the
-same transaction. It cannot increase stock or accept an adjustment delta.
+Record a manual sale. The existing one-product request remains supported, and
+the `items` request records 1–20 distinct products in one sale. Each line has
+its own positive quantity and integer-cent amount. The endpoint subtracts every
+quantity using `adjust_stock()` and stores every `SALE` ledger row in the same
+database transaction. A failure on any line rolls back all stock changes and
+ledger writes. Product stock rows are adjusted in sorted product-ID order to
+avoid deadlocks between overlapping sales. It cannot increase stock or accept
+an adjustment delta.
 
 **Request**
 
@@ -1524,12 +1532,74 @@ same transaction. It cannot increase stock or accept an adjustment delta.
 }
 ```
 
-**Response 201** — includes `transactionId`, `productId`, `productName`, `qty`,
-`saleTotalCents`, and authoritative `stockQty` after the sale.
+Or, for a multi-product sale:
+
+```json
+{
+  "items": [
+    {
+      "productId": "cmtlfpsen0001v57dkjtmrxpf",
+      "qty": 2,
+      "saleTotalCents": 475
+    },
+    {
+      "productId": "cmtlfpsen0002v57dkjtmrxpf",
+      "qty": 1,
+      "saleTotalCents": 125
+    }
+  ]
+}
+```
+
+Each request line is strict: no extra fields, `qty` must be an integer from
+1–10,000, and `saleTotalCents` must be a non-negative integer cent amount.
+The multi-line form requires 1–20 lines with distinct product IDs.
+
+**Response 201** — the existing one-product request retains its response:
+
+```json
+{
+  "transactionId": "cmtlfpsen0001v57dkjtmrxpf",
+  "productId": "cmtlfpsen0001v57dkjtmrxpf",
+  "productName": "Cheese Puff Cup",
+  "qty": 2,
+  "saleTotalCents": 475,
+  "stockQty": 18
+}
+```
+
+The multi-line response is:
+
+```json
+{
+  "items": [
+    {
+      "productId": "cmtlfpsen0001v57dkjtmrxpf",
+      "productName": "Cheese Puff Cup",
+      "qty": 2,
+      "saleTotalCents": 475,
+      "stockQty": 18
+    },
+    {
+      "productId": "cmtlfpsen0002v57dkjtmrxpf",
+      "productName": "Apple Juice",
+      "qty": 1,
+      "saleTotalCents": 125,
+      "stockQty": 9
+    }
+  ]
+}
+```
+
+`stockQty` is authoritative after deduction. Each `saleTotalCents` is the
+entered total for that product line, not a unit amount. Line order matches the
+request order.
 
 **Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400,
 `PRODUCT_UNAVAILABLE` 409, `STOCK_ADJUSTMENT_REJECTED` 409 when available stock
-is less than the quantity sold, `INTERNAL` 500.
+is less than the quantity sold (includes the failing `productId`, current
+`stockQty`, and negative `delta`), `INTERNAL` 500. For multi-line requests,
+stock failure on any product leaves all products and sale ledger rows unchanged.
 
 ---
 
@@ -1546,10 +1616,100 @@ requires the staff admin session. It is not available through the restricted
 with `productId`, `productName`, and `saleTotalCents` on each entry. Student
 fields are never selected; order-sale rows include only order number and status.
 Pending, canceled, and expired orders are excluded. `hasMore` indicates older
-records are available.
+records are available. Stock transaction rows include `totalCostCents` when a
+purchase stored an exact aggregate amount; it is `null` for legacy purchases
+and non-purchase rows.
 
 **Errors** — `ADMIN_UNAUTHORIZED` 401, `INVALID_INPUT` 400 for an invalid
 `take`, `INTERNAL` 500.
+
+---
+
+### `GET /api/admin/cost-analysis`
+
+Returns product-level purchase totals and order-level sales rows. Requires the staff
+admin session. This is a read-only endpoint, is unavailable through the
+restricted `/api/inventory/*` role, and sends `Cache-Control: no-store`.
+
+**Request** — no query parameters.
+
+**Response 200**
+
+```json
+{
+  "purchases": [
+    {
+      "id": "product-id",
+      "productId": "cmtlfpsen0001v57dkjtmrxpf",
+      "productName": "Cheese Puff Cup",
+      "quantity": 26,
+      "quantityLeft": 18,
+      "totalCostCents": 2300,
+      "unitCostCents": 88,
+      "currentSellingPriceCents": 175,
+      "projectedProfitCents": 2250,
+      "actualProfitCents": -1250,
+      "date": "2026-10-01T16:00:00.000Z",
+      "lastUpdated": "2026-10-02T16:00:00.000Z"
+    }
+  ],
+  "orders": [
+    {
+      "orderNumber": "LL-12345",
+      "date": "2026-10-02T16:00:00.000Z",
+      "itemsSold": 2,
+      "cogsCents": 150,
+      "revenueCents": 350,
+      "profitCents": 200,
+      "costBasisComplete": true
+    }
+  ],
+  "products": [
+    {
+      "productId": "cmtlfpsen0001v57dkjtmrxpf",
+      "productName": "Cheese Puff Cup",
+      "currentStockQty": 18
+    }
+  ]
+}
+```
+
+Each purchase row is an aggregate for one product, so subsequent supplier
+deliveries update its displayed quantity and exact total cost instead of
+creating another product row. `totalCostCents` sums recorded supplier totals;
+`unitCostCents` is the rounded weighted average cost per purchased item.
+`projectedProfitCents` uses all purchased units and the product's current
+selling price. `actualProfitCents` starts at the negative supplier cost, then
+adds realized revenue as underlying FIFO purchase lots are consumed.
+`quantityLeft` is the aggregate remaining quantity computed from chronologically
+replayed purchase, adjustment, and sale ledger events; `lastUpdated` is the
+latest purchase, sale, or adjustment affecting those lots. Legacy purchases
+with a recorded unit cost but no exact total derive cost from that recorded
+unit cost; rows without a recorded cost, and uncosted adjustment stock, remain
+unknown rather than being assigned a fabricated cost. If any purchase within a
+product's aggregate has unknown cost, aggregate cost and profit values display
+as unavailable.
+
+Order COGS and profit use the FIFO purchase lots consumed by each order item.
+If any sold quantity has unknown cost, `costBasisComplete` is `false` and both
+`cogsCents` and `profitCents` are `null`; revenue and item quantity remain
+available. `REFUNDED` orders report zero revenue but still consume stock, so
+complete-cost orders have profit of `-cogsCents`. Their zero revenue is also
+used when assigning realized profit to purchase lots. Manual `SALE`
+transactions participate in FIFO consumption and attribute their recorded
+`saleTotalCents` to consumed lots. Positive adjustments add unknown-cost stock;
+negative adjustments consume stock FIFO. All cent allocations use integer
+arithmetic and deterministic remainder assignment. The report includes all
+recorded ledger history and online sale items; it returns no student PII.
+
+Order rows include `RESERVED`, `PAID`, `PACKED`, `PICKED_UP`, and `REFUNDED`,
+matching the transaction ledger's sales semantics. `PENDING`, `CANCELLED`, and
+`EXPIRED` orders are excluded. The query selects only order number, timestamps,
+item quantities/prices, and product IDs: student name, email, phone, homeroom,
+pickup details, and account identifiers are not returned.
+
+**Errors** — `ADMIN_UNAUTHORIZED` 401, `ADMIN_NOT_CONFIGURED` 503,
+`INTERNAL` 500.
 
 ---
 
@@ -1852,6 +2012,7 @@ catalog data, and one of the blanks is allergens.
   "allergens": ["DAIRY"],
   "allergensReviewed": true,
   "stockQty": 24,
+  "initialPurchaseTotalCents": 1800,
   "imageUrl": "/products/cheese-puff-cup.svg",
   "active": false,
   "sortOrder": 50
@@ -1869,6 +2030,7 @@ catalog data, and one of the blanks is allergens.
 | `allergens` | `Allergen[]` | Required. De-duplicated. An unrecognised token is a 400, never a silent drop |
 | `allergensReviewed` | `true` | Required. See the allergen rule above |
 | `stockQty` | int | 0–10000. **Absolute, and only here** — see the stock route |
+| `initialPurchaseTotalCents` | int | Required, non-negative integer cents. Exact supplier total for all starting stock; must be `0` when `stockQty` is `0`. Saved on an initial `PURCHASE` ledger row in the same transaction as the product. `unitCostCents` remains available and is derived by rounding total/quantity |
 | `imageUrl` | string | See photo handling above |
 | `active` | boolean | Required, not defaulted. `true` publishes immediately |
 | `sortOrder` | int | Optional, 0–9999, default 0 |
@@ -1878,6 +2040,11 @@ catalog data, and one of the blanks is allergens.
 dropped — a client must never believe a write happened that did not.
 
 **Response 201** — `{ "product": { …Product shape… } }`
+
+Product creation and the initial purchase ledger record commit atomically.
+The purchase record stores the exact `initialPurchaseTotalCents`; its legacy
+`unitCostCents` is a rounded per-unit display value and must not be multiplied
+back to recover the recorded total.
 
 **Errors**
 
@@ -1924,11 +2091,13 @@ attack.
 
 ### `POST /api/inventory/products/[productId]/stock`
 
-**Request** — `{ "delta": 24 }`
+**Request** — `{ "delta": -3 }` for a stock correction, or
+`{ "delta": 24, "totalCostCents": 1800 }` to record a supplier purchase.
 
 | Field | Type | Notes |
 |---|---|---|
 | `delta` | int | **Signed and relative.** Non-zero, \|delta\| ≤ **1000** (tighter than the staff route's 10000) |
+| `totalCostCents` | int | Required when `delta` is positive; exact purchase total in cents, 0–2,147,483,647. Positive deltas are `PURCHASE` rows. Negative deltas are `ADJUSTMENT` rows and reject this field. |
 
 **Relative here, absolute only at creation, and the difference is the argument:**
 at creation the row does not exist, so nothing can have reserved stock on it and
@@ -1938,11 +2107,12 @@ reserves a unit between the count and the submit gets silently un-reserved
 (CLAUDE.md §2.4). **Compute the delta on screen** (they counted 7, the screen
 showed 9, send `-2`); the database does not care who is holding the clipboard.
 
-Applied by `adjust_stock()` — check and write in one `UPDATE`. **P4b adds no SQL
-and needs no migration; `manual_constraints.sql` does not need re-running.**
-Verified: 20 simultaneous `+1` returned 20 **distinct** quantities and landed
-exactly `+20`. Works on inactive products, which is exactly when a miscount is
-found.
+Applied by `adjust_stock()` — check and write in one `UPDATE` — in the same
+database transaction that persists the stock ledger row. Negative stock corrections without `totalCostCents` create an `ADJUSTMENT` row;
+positive stock additions require the exact purchase total and create a
+`PURCHASE` row with exact `totalCostCents` and rounded `unitCostCents`. The transaction records `qtyDelta`, resulting
+`stockQtyAfter`, and inventory `sessionId`. **No migration is needed.** Works
+on inactive products, which is exactly when a miscount is found.
 
 **Response 200**
 
@@ -1954,6 +2124,10 @@ found.
   "stockQty": 31,
   "delta": -3,
   "previousStockQty": 34,
+  "transactionId": "cmtlfpsen0001v57dkjtmrxpf",
+  "type": "ADJUSTMENT",
+  "unitCostCents": null,
+  "totalCostCents": null,
   "active": true,
   "allergens": ["DAIRY"]
 }
@@ -1967,7 +2141,7 @@ expected; **show this number, not their arithmetic.**
 
 | `code` | HTTP | Cause |
 |---|---|---|
-| `INVALID_INPUT` | 400 | `delta` missing, zero, fractional, out of range, or an unknown key (including an attempted `stockQty`) |
+| `INVALID_INPUT` | 400 | `delta` missing, zero, fractional, or out of range; `totalCostCents` fractional/out of range or supplied with non-positive `delta`; or an unknown key (including an attempted `stockQty`) |
 | `INVENTORY_UNAUTHORIZED` | 401 | No inventory session |
 | `PRODUCT_UNAVAILABLE` | 409 | No such product, or a malformed id |
 | `STOCK_ADJUSTMENT_REJECTED` | 409 | Would leave a negative quantity. Carries `productId`, current `stockQty`, `delta` |
@@ -2000,6 +2174,7 @@ Planned, in build order (shipped rows marked):
 | P4 | `POST /api/admin/products/[productId]/stock` | Atomic purchase/correction and persisted stock transaction | **Shipped** — §6a |
 | P4 | `POST /api/admin/sales` | Record units sold, sale amount, and deduct stock atomically | **Shipped** — §6a |
 | P4 | `GET /api/admin/transactions` | Combined latest transactions across products | **Shipped** — §6a |
+| P4 | `GET /api/admin/cost-analysis` | Purchase cost and order-level revenue/COGS/profit rows | **Shipped** — §6a |
 | P4 | `GET /api/admin/products/[productId]/transactions` | Combined stock-change and order-line timeline | **Shipped** — §6a |
 | P4b | `POST /api/inventory/login` · `POST /api/inventory/logout` · `GET /api/inventory/session` | Inventory-editor sign-in on its own passcode and its own secret | **Shipped** — §6b |
 | P4b | `GET /api/inventory/products` | Every product, active and inactive, every stock level | **Shipped** — §6b |

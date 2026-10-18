@@ -47,6 +47,8 @@ export const dynamic = "force-dynamic";
 
 const productIdSchema = z.cuid();
 
+class StockAdjustmentRejected extends Error {}
+
 export async function POST(
   req: NextRequest,
   ctx: { params: Promise<{ productId: string }> },
@@ -74,19 +76,47 @@ export async function POST(
         fields: parsed.error.flatten().fieldErrors,
       });
     }
-    const { delta } = parsed.data;
+    const { delta, totalCostCents } = parsed.data;
+    const type = totalCostCents === undefined ? "ADJUSTMENT" : "PURCHASE";
+    let transaction: {
+      id: string;
+      stockQty: number;
+      unitCostCents: number | null;
+    };
+    try {
+      transaction = await db.$transaction(async (tx) => {
+        // The stock change and its immutable ledger entry must commit or roll
+        // back together.
+        const rows = await tx.$queryRaw<{ stock: number | null }[]>`
+          SELECT adjust_stock(${productId}::text, ${delta}::int) AS stock
+        `;
+        const stockQty = rows[0]?.stock ?? null;
+        if (stockQty === null) throw new StockAdjustmentRejected();
 
-    // The whole decision, in one statement. `stock` is the new quantity, or
-    // NULL if the product is missing or the change would go below zero.
-    const rows = await db.$queryRaw<{ stock: number | null }[]>`
-      SELECT adjust_stock(${productId}::text, ${delta}::int) AS stock
-    `;
-    const stockQty = rows[0]?.stock ?? null;
+        const unitCostCents =
+          totalCostCents === undefined
+            ? null
+            : Math.round(totalCostCents / delta);
+        const stockTransaction = await tx.stockTransaction.create({
+          data: {
+            productId,
+            type,
+            qtyDelta: delta,
+            unitCostCents,
+            totalCostCents: totalCostCents ?? null,
+            stockQtyAfter: stockQty,
+            sessionId,
+          },
+          select: { id: true },
+        });
 
-    if (stockQty === null) {
-      // Diagnostic ONLY — the decision was already made and committed above.
-      // This read exists to say which of the two failures was hit and can never
-      // cause a write.
+        return { id: stockTransaction.id, stockQty, unitCostCents };
+      });
+    } catch (error) {
+      if (!(error instanceof StockAdjustmentRejected)) throw error;
+      // Diagnostic only. The failed transaction rolled back; this read
+      // identifies whether the product was missing or the change went below
+      // zero and never performs a write.
       const product = await db.product.findUnique({
         where: { id: productId },
         select: { stockQty: true },
@@ -98,10 +128,12 @@ export async function POST(
         delta,
       });
     }
+    const { stockQty } = transaction;
 
     logEvent("inventory_stock_adjusted", {
       productId,
       delta,
+      type,
       stockQty,
       sessionId,
     });
@@ -122,6 +154,10 @@ export async function POST(
         /// not their arithmetic.
         stockQty,
         delta,
+        transactionId: transaction.id,
+        type,
+        unitCostCents: transaction.unitCostCents,
+        totalCostCents: totalCostCents ?? null,
         /// Derived from the atomic result, not a second read: what the quantity
         /// was at the instant of the write.
         previousStockQty: stockQty - delta,
