@@ -27,9 +27,9 @@ export function SlotPicker({
   );
   const [selectedDate, setSelectedDate] = useState<string | null>(groups[0]?.dateKey ?? null);
   const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">("pickup");
-  const [pickupLocation, setPickupLocation] = useState("Locker A157");
+  const [pickupLocation, setPickupLocation] = useState("Locker B459");
 
-  const pickupLocations = ["Locker A157", "The Hub", "E-wing stairs"];
+  const pickupLocations = ["Locker B459", "The Hub", "E-wing stairs"];
 
   const effectiveSelectedDate =
     selectedDate && groups.some((group) => group.dateKey === selectedDate)
